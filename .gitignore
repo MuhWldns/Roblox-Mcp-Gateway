@@ -1,2 +1,11 @@
 .worktrees/
 .superpowers/
+.env*
+bin/
+web/dist/
+web/node_modules/
+coverage/
+*.coverprofile
+*.log
+credentials/
+*.credential
