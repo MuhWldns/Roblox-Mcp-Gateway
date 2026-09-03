@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"robloxkit/internal/mcpprocess"
@@ -112,14 +113,16 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 	started = true
 	var lifecycle struct {
 		sync.Mutex
-		exited bool
+		exited atomic.Bool
 		err    error
 	}
 	waitResult := make(chan error, 1)
 	go func() {
 		err := deps.Process.Wait()
+		// Publish liveness before taking the bookkeeping lock so a return from
+		// Wait cannot be hidden behind the lock held during Connected emission.
+		lifecycle.exited.Store(true)
 		lifecycle.Lock()
-		lifecycle.exited = true
 		lifecycle.err = err
 		lifecycle.Unlock()
 		waitResult <- err
@@ -228,8 +231,19 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		studioCount = result.count
 	}
+	if lifecycle.exited.Load() {
+		lifecycle.Lock()
+		childErr := lifecycle.err
+		lifecycle.Unlock()
+		if childErr == nil {
+			childErr = errors.New("MCP process exited unexpectedly")
+		}
+		return emitReconnect(emit, deps.RetryBackoff, childErr)
+	}
+	// Keep the lifecycle lock through the readiness event. The waiter cannot
+	// publish an exit between this liveness check and Connected emission.
 	lifecycle.Lock()
-	if lifecycle.exited {
+	if lifecycle.exited.Load() {
 		childErr := lifecycle.err
 		lifecycle.Unlock()
 		if childErr == nil {
