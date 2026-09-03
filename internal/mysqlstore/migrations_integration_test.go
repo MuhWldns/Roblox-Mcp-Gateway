@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+
+	"robloxkit/internal/robloxauth"
 )
 
 func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
@@ -81,11 +83,32 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("migration version = %d, want 4", version)
+	if version != 5 {
+		t.Fatalf("migration version = %d, want 5", version)
 	}
 	assertBinaryDigest(t, db, "web_sessions", "token_digest")
 	assertNoPlaintextTokenColumns(t, db)
+}
+
+func TestMigrationsPreserveCaseAndAccentExactSubjects(t *testing.T) {
+	db := identityTestDatabase(t)
+	store := NewIdentityStore(db)
+
+	inputs := []string{"Subject_1", "subject_1", "Śubject_1"}
+	users := make(map[string]struct{}, len(inputs))
+	for _, subject := range inputs {
+		user, err := store.UpsertRobloxIdentity(t.Context(), robloxauth.RobloxIdentity{Subject: subject, DisplayName: subject})
+		if err != nil {
+			t.Fatalf("upsert subject %q: %v", subject, err)
+		}
+		if user.RobloxSubject != subject {
+			t.Fatalf("subject %q returned mapped subject %q", subject, user.RobloxSubject)
+		}
+		users[user.ID] = struct{}{}
+	}
+	if len(users) != len(inputs) {
+		t.Fatalf("case/accent-distinct subjects collapsed into %d users, want %d", len(users), len(inputs))
+	}
 }
 
 func isSafeIdentifier(s string) bool {
