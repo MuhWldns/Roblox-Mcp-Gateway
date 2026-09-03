@@ -27,19 +27,26 @@ type fakeProcess struct {
 	strictProtocol   bool
 	applicationError bool
 	waitReturned     chan struct{}
+	waitRelease      chan struct{}
+	commitStarted    chan struct{}
+	blockCommit      bool
+	commitOnce       sync.Once
 	mu               sync.Mutex
 }
 
 func newFakeProcess() *fakeProcess {
 	return &fakeProcess{
-		responses:    make(chan json.RawMessage, 8),
-		diags:        make(chan mcpprocess.SafeProcessError, 1),
-		stopCh:       make(chan struct{}),
-		crashCh:      make(chan error, 1),
-		sent:         make(chan json.RawMessage, 8),
-		waitReturned: make(chan struct{}),
+		responses:     make(chan json.RawMessage, 8),
+		diags:         make(chan mcpprocess.SafeProcessError, 1),
+		stopCh:        make(chan struct{}),
+		crashCh:       make(chan error, 1),
+		sent:          make(chan json.RawMessage, 8),
+		waitReturned:  make(chan struct{}),
+		waitRelease:   make(chan struct{}),
+		commitStarted: make(chan struct{}),
 	}
 }
+
 func (p *fakeProcess) Start(context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -109,9 +116,19 @@ func (p *fakeProcess) Wait() error {
 	select {
 	case err := <-p.crashCh:
 		return err
+	case <-p.waitRelease:
+		return p.waitErr
 	case <-p.stopCh:
 		return p.waitErr
 	}
+}
+func (p *fakeProcess) CommitReadiness(commit func() error) error {
+	if !p.blockCommit {
+		return commit()
+	}
+	p.commitOnce.Do(func() { close(p.commitStarted); close(p.waitRelease) })
+	<-p.waitReturned
+	return errors.New("child exited during readiness commit")
 }
 
 func TestRunLocalEventOrder(t *testing.T) {
@@ -426,5 +443,68 @@ func TestRunLocalChildExitDuringStudioReadinessCannotConnect(t *testing.T) {
 		if event.State == statusui.Connected {
 			t.Fatal("connected emitted after MCP child exited during Studio readiness")
 		}
+	}
+}
+func TestRunLocalReadinessCommitRejectsWaitReturnBeforeConnected(t *testing.T) {
+	p := newFakeProcess()
+	p.blockCommit = true
+	var eventsMu sync.Mutex
+	var events []statusui.Event
+	result := make(chan error, 1)
+	go func() {
+		result <- RunLocal(context.Background(), LocalDeps{
+			Machine: statusui.NewMachine(), Process: p, Output: io.Discard,
+			RetryBackoff: time.Millisecond,
+			StudioReady:  func(context.Context) (int, error) { return 1, nil },
+			EventSink: func(e statusui.Event) error {
+				eventsMu.Lock()
+				events = append(events, e)
+				eventsMu.Unlock()
+				return nil
+			},
+		})
+	}()
+	select {
+	case <-p.commitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("readiness commit was not entered")
+	}
+	select {
+	case <-p.waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return while readiness commit was held")
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("RunLocal error = nil, want child-exit readiness commit rejection")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunLocal remained blocked after readiness commit observed Wait return")
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	for _, event := range events {
+		if event.State == statusui.Connected {
+			t.Fatal("Connected emitted after Process.Wait returned")
+		}
+	}
+}
+
+func TestFindReadOnlyToolRejectsIncompatibleEnumAndUsesCompatibleTool(t *testing.T) {
+	result := json.RawMessage(`{"tools":[{"name":"bad","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","properties":{"count":{"type":"string","enum":[1]}}}},{"name":"good","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","properties":{"count":{"type":"integer","enum":[1]}}}}]}`)
+	name, args, err := findReadOnlyTool(result)
+	if err != nil {
+		t.Fatalf("findReadOnlyTool() error = %v", err)
+	}
+	if name != "good" || args["count"] != float64(1) {
+		t.Fatalf("selected tool = %q args = %#v, want good with numeric count", name, args)
+	}
+}
+
+func TestFindReadOnlyToolRejectsMalformedAndUnsupportedRootSchemas(t *testing.T) {
+	result := json.RawMessage(`{"tools":[{"name":"required-object","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","required":{},"properties":{}}},{"name":"min-properties","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","minProperties":1,"properties":{}}},{"name":"non-object-schema","annotations":{"readOnlyHint":true},"inputSchema":"bad"}]}`)
+	if name, _, err := findReadOnlyTool(result); err == nil || name != "" {
+		t.Fatalf("findReadOnlyTool() = %q, %v; want no schema-compatible tool", name, err)
 	}
 }

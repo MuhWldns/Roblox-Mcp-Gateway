@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 	"time"
 
 	"robloxkit/internal/mcpprocess"
@@ -111,22 +110,8 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		return emitFatal(emit, "MCP_PROCESS_UNAVAILABLE", "Official Roblox MCP could not be started.", err)
 	}
 	started = true
-	var lifecycle struct {
-		sync.Mutex
-		exited bool
-		err    error
-	}
 	waitResult := make(chan error, 1)
-	waitDone := make(chan struct{})
-	go func() {
-		err := deps.Process.Wait()
-		close(waitDone)
-		lifecycle.Lock()
-		lifecycle.err = err
-		lifecycle.exited = true
-		lifecycle.Unlock()
-		waitResult <- err
-	}()
+	go func() { waitResult <- deps.Process.Wait() }()
 	request := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"RobloxBridge","version":"1.0.0"}}}`, initializeRequestID))
 	if err := deps.Process.Send(ctx, request); err != nil {
 		if ctx.Err() != nil {
@@ -238,32 +223,18 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		studioCount = result.count
 	}
-	// The waiter closes waitDone at the exact Process.Wait return point. Once
-	// this gate is entered, a completed child is always observed before emit.
-	lifecycle.Lock()
-	select {
-	case <-waitDone:
-		childErr := lifecycle.err
-		lifecycle.Unlock()
-		if childErr == nil {
-			childErr = errors.New("MCP process exited unexpectedly")
+	if err := deps.Process.CommitReadiness(func() error {
+		return emit(statusui.Event{State: statusui.Connected, DeviceName: deps.DeviceName, StudioCount: studioCount}, true)
+	}); err != nil {
+		if errors.Is(err, mcpprocess.ErrReadinessUnavailable) {
+			childErr := <-waitResult
+			if childErr == nil {
+				childErr = errors.New("MCP process exited unexpectedly")
+			}
+			return emitReconnect(emit, deps.RetryBackoff, childErr)
 		}
-		return emitReconnect(emit, deps.RetryBackoff, childErr)
-	default:
-	}
-	if lifecycle.exited {
-		childErr := lifecycle.err
-		lifecycle.Unlock()
-		if childErr == nil {
-			childErr = errors.New("MCP process exited unexpectedly")
-		}
-		return emitReconnect(emit, deps.RetryBackoff, childErr)
-	}
-	if err := emit(statusui.Event{State: statusui.Connected, DeviceName: deps.DeviceName, StudioCount: studioCount}, true); err != nil {
-		lifecycle.Unlock()
 		return err
 	}
-	lifecycle.Unlock()
 
 	select {
 	case <-ctx.Done():
@@ -344,19 +315,33 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 		if typ, ok := tool.InputSchema["type"].(string); !ok || typ != "object" {
 			continue
 		}
-		properties, ok := tool.InputSchema["properties"].(map[string]any)
-		if !ok {
+		unsupportedRoot := []string{"minProperties", "maxProperties", "patternProperties", "propertyNames", "dependencies", "dependentRequired", "dependentSchemas", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"}
+		valid := true
+		for _, constraint := range unsupportedRoot {
+			if _, exists := tool.InputSchema[constraint]; exists {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		properties, propertiesPresent := tool.InputSchema["properties"]
+		if !propertiesPresent {
 			properties = map[string]any{}
 		}
+		propertyMap, ok := properties.(map[string]any)
+		if !ok {
+			continue
+		}
 		args := make(map[string]any)
-		valid := true
-		for key, raw := range properties {
+		for key, raw := range propertyMap {
 			property, ok := raw.(map[string]any)
 			if !ok {
 				valid = false
 				break
 			}
-			for _, constraint := range []string{"pattern", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minItems", "maxItems", "uniqueItems", "const"} {
+			for _, constraint := range []string{"pattern", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minItems", "maxItems", "uniqueItems", "const", "oneOf", "anyOf", "allOf", "not"} {
 				if _, exists := property[constraint]; exists {
 					valid = false
 					break
@@ -365,7 +350,12 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 			if !valid {
 				break
 			}
-			switch property["type"] {
+			propertyType, ok := property["type"].(string)
+			if !ok {
+				valid = false
+				break
+			}
+			switch propertyType {
 			case "string":
 				args[key] = "RobloxBridge readiness probe"
 			case "boolean":
@@ -377,7 +367,7 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 			}
 			if enum, exists := property["enum"]; exists {
 				values, ok := enum.([]any)
-				if !ok || len(values) == 0 {
+				if !ok || len(values) == 0 || !enumValueCompatible(values[0], propertyType) {
 					valid = false
 				} else {
 					args[key] = values[0]
@@ -387,8 +377,12 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 		if !valid {
 			continue
 		}
-		if required, ok := tool.InputSchema["required"].([]any); ok {
-			for _, raw := range required {
+		if required, exists := tool.InputSchema["required"]; exists {
+			requiredValues, ok := required.([]any)
+			if !ok {
+				continue
+			}
+			for _, raw := range requiredValues {
 				key, ok := raw.(string)
 				if !ok {
 					valid = false
@@ -400,10 +394,16 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 				}
 			}
 		}
-		if additional, ok := tool.InputSchema["additionalProperties"].(bool); ok && !additional {
-			for key := range args {
-				if _, exists := properties[key]; !exists {
-					valid = false
+		if additional, exists := tool.InputSchema["additionalProperties"]; exists {
+			additionalBool, ok := additional.(bool)
+			if !ok {
+				continue
+			}
+			if !additionalBool {
+				for key := range args {
+					if _, exists := propertyMap[key]; !exists {
+						valid = false
+					}
 				}
 			}
 		}
@@ -429,6 +429,25 @@ func validateSafeCallResult(result json.RawMessage) error {
 		return errors.New("tools/call returned an application error")
 	}
 	return nil
+}
+
+func enumValueCompatible(value any, propertyType string) bool {
+	switch propertyType {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "integer":
+		n, ok := value.(float64)
+		return ok && n == float64(int64(n))
+	default:
+		return false
+	}
 }
 
 func emitFatal(emit func(statusui.Event, bool) error, code, message string, cause error) error {

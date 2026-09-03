@@ -35,7 +35,12 @@ type Process interface {
 	Diagnostics() <-chan SafeProcessError
 	Stop(context.Context) error
 	Wait() error
+	// CommitReadiness atomically checks that the child is still live and runs
+	// commit while holding the process lifecycle lock.
+	CommitReadiness(func() error) error
 }
+
+var ErrReadinessUnavailable = errors.New("MCP process is no longer ready")
 
 type managedProcess struct {
 	command      Command
@@ -256,6 +261,17 @@ func (p *managedProcess) stopResult() error {
 		return p.processCtx.Err()
 	}
 	return p.waitErr
+}
+func (p *managedProcess) CommitReadiness(commit func() error) error {
+	if commit == nil {
+		return errors.New("readiness commit callback is nil")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.started || p.stopping {
+		return ErrReadinessUnavailable
+	}
+	return commit()
 }
 
 func (p *managedProcess) writeLoop(ctx context.Context, stdin io.WriteCloser) {

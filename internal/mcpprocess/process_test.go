@@ -234,7 +234,6 @@ func TestProcessNaturalChildExitStopsWriterAndWaits(t *testing.T) {
 	}
 }
 
-
 func TestProcessStartHonorsAlreadyCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -243,6 +242,30 @@ func TestProcessStartHonorsAlreadyCanceledContext(t *testing.T) {
 	err := p.Start(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Start() error = %v, want context.Canceled", err)
+	}
+}
+func TestProcessReadinessCommitRejectsAfterWaitReturns(t *testing.T) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("find Go executable: %v", err)
+	}
+	p := NewProcess(Command{Path: goPath, Args: []string{"version"}}, Options{StopTimeout: time.Second})
+	if err := p.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := p.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	called := false
+	err = p.CommitReadiness(func() error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, ErrReadinessUnavailable) {
+		t.Fatalf("CommitReadiness() error = %v, want ErrReadinessUnavailable", err)
+	}
+	if called {
+		t.Fatal("CommitReadiness() invoked callback after Wait returned")
 	}
 }
 
@@ -290,7 +313,7 @@ func TestLauncherCanonicalizesTrustedLocalCommandAndCopiesArguments(t *testing.T
 
 func TestLauncherRejectsNonLocalAndControlCharacterInputs(t *testing.T) {
 	tests := []struct {
-		name     string
+		name string
 		path string
 		args []string
 	}{
