@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -159,6 +161,79 @@ func TestProcessCancellationTerminatesChildAndUnblocksWait(t *testing.T) {
 		t.Fatal("Wait() remained blocked after process context cancellation")
 	}
 }
+func TestProcessStopReturnsWhenResponsesAreNotDrained(t *testing.T) {
+	p := newFakeProcess(t, 64*1024)
+	if err := p.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	var sends sync.WaitGroup
+	for id := 1; id <= processQueueSize*2; id++ {
+		id := id
+		sends.Add(1)
+		go func() {
+			defer sends.Done()
+			request := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{}}`, id))
+			_ = p.Send(context.Background(), request)
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	stopDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		stopDone <- p.Stop(ctx)
+	}()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("Stop() remained blocked while caller stopped draining Responses")
+	}
+	sends.Wait()
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- p.Wait() }()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait() remained blocked after Stop()")
+	}
+}
+
+func TestProcessNaturalChildExitStopsWriterAndWaits(t *testing.T) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("find Go executable: %v", err)
+	}
+	p := NewProcess(Command{Path: goPath, Args: []string{"version"}}, Options{StopTimeout: time.Second})
+	if err := p.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- p.Wait() }()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait() remained blocked after natural child exit")
+	}
+	managed := p.(*managedProcess)
+	select {
+	case <-managed.shutdown:
+	default:
+		t.Fatal("writer shutdown signal remained open after natural child exit")
+	}
+}
+
 
 func TestProcessStartHonorsAlreadyCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
@@ -238,7 +313,7 @@ func TestLauncherUsesCOMSPECOnlyForTrustedWindowsBatchFile(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launcher contract")
 	}
-	batchPath := filepath.Join(t.TempDir(), "official-mcp.bat")
+	batchPath := filepath.Join(t.TempDir(), "official mcp.bat")
 	if err := os.WriteFile(batchPath, []byte("@echo off\r\n"), 0o600); err != nil {
 		t.Fatalf("write batch fixture: %v", err)
 	}
@@ -255,7 +330,7 @@ func TestLauncherUsesCOMSPECOnlyForTrustedWindowsBatchFile(t *testing.T) {
 	if !strings.EqualFold(command.Path, comspec) {
 		t.Fatalf("batch command path = %q, want COMSPEC %q", command.Path, comspec)
 	}
-	wantArgs := []string{"/d", "/s", "/c", batchPath}
+	wantArgs := []string{"/d", "/s", "/c", quoteBatchPath(batchPath)}
 	if strings.Join(command.Args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("batch command args = %#v, want %#v", command.Args, wantArgs)
 	}
@@ -290,6 +365,13 @@ func newFakeProcess(t *testing.T, maxFrameBytes int) Process {
 		MaxFrameBytes: maxFrameBytes,
 		StopTimeout:   2 * time.Second,
 	})
+}
+
+func TestQuoteBatchPathForCOMSPEC(t *testing.T) {
+	path := `C:\Program Files\Official MCP\server.bat`
+	if got, want := quoteBatchPath(path), `"C:\Program Files\Official MCP\server.bat"`; got != want {
+		t.Fatalf("quoteBatchPath(%q) = %q, want %q", path, got, want)
+	}
 }
 
 func startProcess(t *testing.T, p Process) {

@@ -63,10 +63,14 @@ func (l Launcher) Resolve() (Command, error) {
 		if err != nil {
 			return Command{}, fmt.Errorf("resolve COMSPEC: %w", err)
 		}
-		return Command{Path: comspec, Args: []string{"/d", "/s", "/c", trustedPath}}, nil
+		return Command{Path: comspec, Args: []string{"/d", "/s", "/c", quoteBatchPath(trustedPath)}}, nil
 	}
 
 	return Command{Path: trustedPath, Args: append([]string(nil), l.trustedArgs...)}, nil
+}
+
+func quoteBatchPath(path string) string {
+	return `"` + strings.ReplaceAll(path, `"`, `""`) + `"`
 }
 
 func canonicalFile(path string) (string, error) {

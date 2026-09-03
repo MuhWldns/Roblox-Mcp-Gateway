@@ -45,6 +45,8 @@ type managedProcess struct {
 	diagnostics  chan SafeProcessError
 	writes       chan writeRequest
 	stopWriter   chan struct{}
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
 	done         chan struct{}
 	mu           sync.Mutex
 	started      bool
@@ -81,6 +83,7 @@ func NewProcess(command Command, options Options) Process {
 		diagnostics:  make(chan SafeProcessError, processQueueSize),
 		writes:       make(chan writeRequest, processQueueSize),
 		stopWriter:   make(chan struct{}),
+		shutdown:     make(chan struct{}),
 		done:         make(chan struct{}),
 		pendingCalls: make(map[string]int),
 	}
@@ -112,10 +115,13 @@ func (p *managedProcess) Start(ctx context.Context) error {
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		_ = stdin.Close()
+		_ = stdout.Close()
 		return fmt.Errorf("open MCP stderr: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
 		return fmt.Errorf("start MCP process: %w", err)
 	}
 
@@ -124,18 +130,21 @@ func (p *managedProcess) Start(ctx context.Context) error {
 	p.stdin = stdin
 	p.processCtx = ctx
 
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go p.writeLoop(ctx, stdin)
+	var workers sync.WaitGroup
+	workers.Add(3)
 	go func() {
-		defer readers.Done()
+		defer workers.Done()
+		p.writeLoop(ctx, stdin)
+	}()
+	go func() {
+		defer workers.Done()
 		p.readResponses(ctx, stdout)
 	}()
 	go func() {
-		defer readers.Done()
+		defer workers.Done()
 		p.readDiagnostics(ctx, stderr)
 	}()
-	go p.reap(cmd, ctx, &readers)
+	go p.reap(cmd, ctx, &workers)
 	return nil
 }
 
@@ -202,6 +211,7 @@ func (p *managedProcess) Stop(ctx context.Context) error {
 	if !p.stopping {
 		p.stopping = true
 		close(p.stopWriter)
+		p.shutdownOnce.Do(func() { close(p.shutdown) })
 	}
 	cmd := p.cmd
 	p.mu.Unlock()
@@ -254,10 +264,12 @@ func (p *managedProcess) writeLoop(ctx context.Context, stdin io.WriteCloser) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-p.stopWriter:
+		case <-p.shutdown:
 			return
 		case request := <-p.writes:
+			if request.ctx == nil {
+				continue
+			}
 			if err := request.ctx.Err(); err != nil {
 				request.result <- err
 				continue
@@ -298,7 +310,7 @@ func (p *managedProcess) readResponses(ctx context.Context, stdout io.Reader) {
 		select {
 		case p.responses <- response:
 		case <-ctx.Done():
-		case <-p.done:
+		case <-p.shutdown:
 		}
 	}, "stdout")
 }
@@ -359,9 +371,10 @@ func (p *managedProcess) validateIncoming(frame json.RawMessage) error {
 	return nil
 }
 
-func (p *managedProcess) reap(cmd *exec.Cmd, ctx context.Context, readers *sync.WaitGroup) {
+func (p *managedProcess) reap(cmd *exec.Cmd, ctx context.Context, workers *sync.WaitGroup) {
 	err := cmd.Wait()
-	readers.Wait()
+	p.shutdownOnce.Do(func() { close(p.shutdown) })
+	workers.Wait()
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
