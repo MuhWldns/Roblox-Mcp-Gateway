@@ -35,9 +35,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	if err := mysqlstore.Migrate(ctx, db, *command); err != nil {
+	version, err := mysqlstore.Migrate(ctx, db, *command)
+	if err != nil {
 		log.Printf("migration failed: %v", err)
 		os.Exit(1)
 	}
-	fmt.Printf("migration %s completed\n", *command)
+	fmt.Printf("migration %s completed at version %d\n", *command, version)
 }

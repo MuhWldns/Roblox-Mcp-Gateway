@@ -50,15 +50,33 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 		t.Fatalf("open temporary database: %v", err)
 	}
 	defer db.Close()
-	if err := Migrate(ctx, db, "up"); err != nil {
+	if _, err := Migrate(ctx, db, "up"); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
-	if err := Migrate(ctx, db, "up"); err != nil {
+	if _, err := Migrate(ctx, db, "up"); err != nil {
 		t.Fatalf("re-apply migrations: %v", err)
 	}
 	assertUniqueIndex(t, db, "trial_entitlements", "user_id")
 	assertUniqueIndex(t, db, "trial_entitlement_identities", "provider", "provider_subject")
 	assertForeignKey(t, db, "license_device_bindings", "device_id")
+	assertCompositeForeignKey(t, db, "licenses", "roblox_identity_id", "user_id")
+	assertCompositeForeignKey(t, db, "licenses", "subscription_id", "user_id")
+	assertCompositeForeignKey(t, db, "license_device_bindings", "device_id", "user_id")
+	assertCompositeForeignKey(t, db, "device_credentials", "device_id", "user_id")
+	assertCompositeForeignKey(t, db, "device_enrollment_codes", "device_id", "user_id")
+	assertTrigger(t, db, "trial_entitlements_no_update")
+	assertTrigger(t, db, "trial_entitlements_no_delete")
+	assertTrigger(t, db, "trial_entitlement_identities_no_update")
+	assertTrigger(t, db, "trial_entitlement_identities_no_delete")
+	assertTrialTablesAppendOnly(t, db)
+	assertCrossTenantBindingRejected(t, db)
+	version, err := Migrate(ctx, db, "version")
+	if err != nil {
+		t.Fatalf("read migration version: %v", err)
+	}
+	if version != 4 {
+		t.Fatalf("migration version = %d, want 4", version)
+	}
 	assertBinaryDigest(t, db, "web_sessions", "token_digest")
 	assertNoPlaintextTokenColumns(t, db)
 }
@@ -143,6 +161,65 @@ func assertNoPlaintextTokenColumns(t *testing.T, db *sql.DB) {
 		if dataType != "binary" && column != "family_id" && column != "parent_id" {
 			t.Fatalf("possible plaintext secret column %s.%s (%s)", table, column, dataType)
 		}
+	}
+}
+func assertCompositeForeignKey(t *testing.T, db *sql.DB, table, column, ownerColumn string) {
+	t.Helper()
+	var count int
+	err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM information_schema.key_column_usage a JOIN information_schema.key_column_usage b ON a.constraint_schema = b.constraint_schema AND a.table_name = b.table_name AND a.constraint_name = b.constraint_name WHERE a.constraint_schema = DATABASE() AND a.table_name = ? AND a.column_name = ? AND b.column_name = ? AND a.referenced_table_name IS NOT NULL`, table, column, ownerColumn).Scan(&count)
+	if err != nil {
+		t.Fatalf("inspect composite foreign key %s.%s: %v", table, column, err)
+	}
+	if count == 0 {
+		t.Fatalf("%s.%s lacks ownership foreign key with %s", table, column, ownerColumn)
+	}
+}
+
+func assertTrigger(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name = ?`, name).Scan(&count); err != nil {
+		t.Fatalf("inspect trigger %s: %v", name, err)
+	}
+	if count != 1 {
+		t.Fatalf("trigger %s count = %d, want 1", name, count)
+	}
+}
+
+func assertTrialTablesAppendOnly(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(t.Context(), `INSERT INTO users (id) VALUES ('00000000-0000-0000-0000-000000000001')`)
+	if err != nil {
+		t.Fatalf("insert trial test user: %v", err)
+	}
+	_, err = db.ExecContext(t.Context(), `INSERT INTO trial_entitlements (id, user_id, started_at, ends_at) VALUES ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`)
+	if err != nil {
+		t.Fatalf("insert trial entitlement: %v", err)
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET ends_at = ends_at WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement update unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `DELETE FROM trial_entitlements WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement delete unexpectedly succeeded")
+	}
+}
+
+func assertCrossTenantBindingRejected(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(t.Context(), `INSERT INTO users (id) VALUES ('00000000-0000-0000-0000-000000000002')`)
+	if err != nil {
+		t.Fatalf("insert second test user: %v", err)
+	}
+	_, err = db.ExecContext(t.Context(), `INSERT INTO devices (id, user_id, name) VALUES ('00000000-0000-0000-0000-000000000022', '00000000-0000-0000-0000-000000000002', 'other')`)
+	if err != nil {
+		t.Fatalf("insert second device: %v", err)
+	}
+	_, err = db.ExecContext(t.Context(), `INSERT INTO licenses (id, user_id, status) VALUES ('00000000-0000-0000-0000-000000000033', '00000000-0000-0000-0000-000000000001', 'active')`)
+	if err != nil {
+		t.Fatalf("insert test license: %v", err)
+	}
+	if _, err = db.ExecContext(t.Context(), `INSERT INTO license_device_bindings (id, user_id, license_id, device_id, slot_ordinal) VALUES ('00000000-0000-0000-0000-000000000044', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000033', '00000000-0000-0000-0000-000000000022', 1)`); err == nil {
+		t.Fatal("cross-tenant binding unexpectedly succeeded")
 	}
 }
 

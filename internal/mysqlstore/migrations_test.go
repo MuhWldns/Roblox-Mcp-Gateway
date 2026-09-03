@@ -8,7 +8,7 @@ import (
 )
 
 func TestMigrateRejectsUnknownCommand(t *testing.T) {
-	if err := Migrate(context.Background(), nil, "nope"); err == nil {
+	if _, err := Migrate(context.Background(), nil, "nope"); err == nil {
 		t.Fatal("unknown migration command returned nil error")
 	}
 }
@@ -22,14 +22,25 @@ func TestMigrationFilesAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration filesystem: %v", err)
 	}
-	if len(entries) == 0 {
-		t.Fatal("migration filesystem is empty")
+	if len(entries) != 4 {
+		t.Fatalf("migration filesystem has %d entries, want 4", len(entries))
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Fatalf("migration filesystem contains directory %q", entry.Name())
+		}
+	}
+}
+
+func TestMigrateVersionReturnsDatabaseVersion(t *testing.T) {
+	if _, err := Migrate(context.Background(), (*sql.DB)(nil), "version"); err == nil {
+		t.Fatal("Migrate(nil, version) returned nil error")
 	}
 }
 
 func TestMigrateRequiresDatabase(t *testing.T) {
 	for _, command := range []string{"up", "status", "version"} {
-		if err := Migrate(context.Background(), (*sql.DB)(nil), command); err == nil {
+		if _, err := Migrate(context.Background(), (*sql.DB)(nil), command); err == nil {
 			t.Fatalf("Migrate(nil, %q) returned nil error", command)
 		}
 	}
