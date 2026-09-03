@@ -389,15 +389,18 @@ func (p *managedProcess) validateIncoming(frame json.RawMessage) error {
 
 func (p *managedProcess) reap(cmd *exec.Cmd, ctx context.Context, workers *sync.WaitGroup) {
 	err := cmd.Wait()
-	p.shutdownOnce.Do(func() { close(p.shutdown) })
-	workers.Wait()
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
+	// Publish the child exit before waiting for protocol workers to drain. This
+	// closes the readiness commit window as soon as Wait returns; done and
+	// response-channel closure remain deferred until worker cleanup completes.
 	p.mu.Lock()
 	p.waitErr = err
 	p.stopping = true
 	p.mu.Unlock()
+	p.shutdownOnce.Do(func() { close(p.shutdown) })
+	workers.Wait()
 	close(p.responses)
 	close(p.diagnostics)
 	close(p.done)
