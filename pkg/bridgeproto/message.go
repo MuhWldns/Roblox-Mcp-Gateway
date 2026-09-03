@@ -33,6 +33,57 @@ type Envelope struct {
 	Payload          json.RawMessage `json:"payload,omitempty"`
 }
 
+type envelopeJSON struct {
+	Version          int             `json:"version"`
+	Type             MessageType     `json:"type"`
+	GatewayRequestID string          `json:"gateway_request_id,omitempty"`
+	DeviceID         string          `json:"device_id"`
+	StudioID         string          `json:"studio_id,omitempty"`
+	Deadline         *time.Time      `json:"deadline,omitempty"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
+}
+
+func (envelope Envelope) MarshalJSON() ([]byte, error) {
+	var deadline *time.Time
+	if !envelope.Deadline.IsZero() {
+		deadline = &envelope.Deadline
+	}
+	return json.Marshal(envelopeJSON{
+		Version:          envelope.Version,
+		Type:             envelope.Type,
+		GatewayRequestID: envelope.GatewayRequestID,
+		DeviceID:         envelope.DeviceID,
+		StudioID:         envelope.StudioID,
+		Deadline:         deadline,
+		Payload:          envelope.Payload,
+	})
+}
+
+func (envelope *Envelope) UnmarshalJSON(data []byte) error {
+	var decoded envelopeJSON
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if err := requireEndOfJSON(decoder); err != nil {
+		return err
+	}
+
+	*envelope = Envelope{
+		Version:          decoded.Version,
+		Type:             decoded.Type,
+		GatewayRequestID: decoded.GatewayRequestID,
+		DeviceID:         decoded.DeviceID,
+		StudioID:         decoded.StudioID,
+		Payload:          decoded.Payload,
+	}
+	if decoded.Deadline != nil {
+		envelope.Deadline = *decoded.Deadline
+	}
+	return nil
+}
+
 type Limits struct {
 	MaxPayloadBytes int
 }

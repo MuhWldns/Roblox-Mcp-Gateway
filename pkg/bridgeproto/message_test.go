@@ -65,6 +65,56 @@ func TestRequestRoundTripPreservesOriginalRPCID(t *testing.T) {
 		})
 	}
 }
+func TestDeadlineIsOptionalOnWireAndPreservesNonzeroValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      Envelope
+		wantDate time.Time
+	}{
+		{
+			name: "unset omitted",
+			env: Envelope{
+				Version: 1,
+				Type:    TypeHeartbeat,
+				DeviceID: "dev_1",
+			},
+		},
+		{
+			name: "nonzero preserved",
+			env: Envelope{
+				Version: 1,
+				Type:    TypeHeartbeat,
+				DeviceID: "dev_1",
+				Deadline: time.Date(2026, time.September, 3, 12, 34, 56, 0, time.UTC),
+			},
+			wantDate: time.Date(2026, time.September, 3, 12, 34, 56, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := Encode(tt.env, Limits{MaxPayloadBytes: testMessageLimit})
+			if err != nil {
+				t.Fatalf("Encode() error = %v", err)
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatalf("unmarshal encoded envelope: %v", err)
+			}
+			if _, ok := wire["deadline"]; ok != !tt.env.Deadline.IsZero() {
+				t.Fatalf("deadline field presence = %v, want %v in %s", ok, !tt.env.Deadline.IsZero(), encoded)
+			}
+
+			got, err := Decode(encoded, Limits{MaxPayloadBytes: testMessageLimit})
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if !got.Deadline.Equal(tt.wantDate) {
+				t.Fatalf("decoded deadline = %s, want %s", got.Deadline, tt.wantDate)
+			}
+		})
+	}
+}
 
 func TestAllMessageTypesRoundTrip(t *testing.T) {
 	tests := []struct {
