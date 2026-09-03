@@ -23,9 +23,10 @@ CREATE TABLE usage_records (
     operation VARCHAR(128) NOT NULL, outcome VARCHAR(64) NOT NULL, units BIGINT UNSIGNED NOT NULL DEFAULT 1,
     request_id VARCHAR(255) NULL, metadata JSON NULL, occurred_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id), KEY ix_usage_user_occurred (user_id, occurred_at), KEY ix_usage_device (device_id),
+    UNIQUE KEY uq_usage_id_user (id, user_id),
     CONSTRAINT fk_usage_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_usage_device FOREIGN KEY (device_id) REFERENCES devices(id),
-    CONSTRAINT fk_usage_studio FOREIGN KEY (studio_session_id) REFERENCES studio_sessions(id)
+    CONSTRAINT fk_usage_device_owner FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id),
+    CONSTRAINT fk_usage_studio_owner FOREIGN KEY (studio_session_id, user_id) REFERENCES studio_sessions(id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- +goose StatementBegin

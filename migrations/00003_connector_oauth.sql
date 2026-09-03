@@ -52,11 +52,10 @@ CREATE TABLE oauth_access_tokens (
 CREATE TABLE oauth_refresh_tokens (
     id CHAR(36) NOT NULL, user_id CHAR(36) NOT NULL, grant_id CHAR(36) NOT NULL, family_id CHAR(36) NOT NULL,
     parent_id CHAR(36) NULL, token_digest BINARY(32) NOT NULL, expires_at TIMESTAMP(6) NOT NULL,
-    used_at TIMESTAMP(6) NULL, revoked_at TIMESTAMP(6) NULL,
-    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
-    UNIQUE KEY uq_oauth_refresh_digest (token_digest), KEY ix_oauth_refresh_family (family_id),
+    used_at TIMESTAMP(6) NULL, revoked_at TIMESTAMP(6) NULL, created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+    UNIQUE KEY uq_oauth_refresh_id_user (id, user_id), UNIQUE KEY uq_oauth_refresh_digest (token_digest), KEY ix_oauth_refresh_family (family_id),
     CONSTRAINT fk_oauth_refresh_grant_owner FOREIGN KEY (grant_id, user_id) REFERENCES oauth_grants(id, user_id),
-    CONSTRAINT fk_oauth_refresh_parent FOREIGN KEY (parent_id) REFERENCES oauth_refresh_tokens(id)
+    CONSTRAINT fk_oauth_refresh_parent_owner FOREIGN KEY (parent_id, user_id) REFERENCES oauth_refresh_tokens(id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- +goose Down

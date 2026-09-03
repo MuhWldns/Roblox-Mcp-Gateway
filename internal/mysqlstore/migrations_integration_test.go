@@ -62,14 +62,19 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	assertCompositeForeignKey(t, db, "licenses", "roblox_identity_id", "user_id")
 	assertCompositeForeignKey(t, db, "licenses", "subscription_id", "user_id")
 	assertCompositeForeignKey(t, db, "license_device_bindings", "device_id", "user_id")
+	assertCompositeForeignKey(t, db, "license_device_bindings", "replaced_by", "user_id")
 	assertCompositeForeignKey(t, db, "device_credentials", "device_id", "user_id")
 	assertCompositeForeignKey(t, db, "device_enrollment_codes", "device_id", "user_id")
+	assertCompositeForeignKey(t, db, "usage_records", "device_id", "user_id")
+	assertCompositeForeignKey(t, db, "usage_records", "studio_session_id", "user_id")
+	assertCompositeForeignKey(t, db, "oauth_refresh_tokens", "parent_id", "user_id")
 	assertTrigger(t, db, "trial_entitlements_no_update")
 	assertTrigger(t, db, "trial_entitlements_no_delete")
 	assertTrigger(t, db, "trial_entitlement_identities_no_update")
 	assertTrigger(t, db, "trial_entitlement_identities_no_delete")
 	assertTrialTablesAppendOnly(t, db)
 	assertCrossTenantBindingRejected(t, db)
+	assertCrossTenantLineageRejected(t, db)
 	version, err := Migrate(ctx, db, "version")
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
@@ -196,8 +201,12 @@ func assertTrialTablesAppendOnly(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("insert trial entitlement: %v", err)
 	}
-	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET ends_at = ends_at WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
-		t.Fatal("trial entitlement update unexpectedly succeeded")
+	_, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET started_at = DATE_ADD(started_at, INTERVAL 1 DAY) WHERE id = '00000000-0000-0000-0000-000000000011'`)
+	if err == nil {
+		t.Fatal("trial entitlement started_at update unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET ends_at = DATE_ADD(ends_at, INTERVAL 1 DAY), extension_reason = 'admin extension', extended_by = user_id WHERE id = '00000000-0000-0000-0000-000000000011'`); err != nil {
+		t.Fatalf("trial entitlement ends_at extension failed: %v", err)
 	}
 	if _, err = db.ExecContext(t.Context(), `DELETE FROM trial_entitlements WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
 		t.Fatal("trial entitlement delete unexpectedly succeeded")
@@ -220,6 +229,15 @@ func assertCrossTenantBindingRejected(t *testing.T, db *sql.DB) {
 	}
 	if _, err = db.ExecContext(t.Context(), `INSERT INTO license_device_bindings (id, user_id, license_id, device_id, slot_ordinal) VALUES ('00000000-0000-0000-0000-000000000044', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000033', '00000000-0000-0000-0000-000000000022', 1)`); err == nil {
 		t.Fatal("cross-tenant binding unexpectedly succeeded")
+	}
+}
+func assertCrossTenantLineageRejected(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO license_device_bindings (id, user_id, license_id, device_id, slot_ordinal, replaced_by) VALUES ('00000000-0000-0000-0000-000000000055', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000033', '00000000-0000-0000-0000-000000000001', 2, '00000000-0000-0000-0000-000000000044')`); err == nil {
+		t.Fatal("cross-tenant binding replacement unexpectedly succeeded")
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO oauth_grants (id, user_id, client_id, scopes, resource) VALUES ('00000000-0000-0000-0000-000000000066', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000067', JSON_ARRAY(), '')`); err == nil {
+		t.Fatal("invalid OAuth grant unexpectedly succeeded")
 	}
 }
 

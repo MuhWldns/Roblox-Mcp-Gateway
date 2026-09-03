@@ -109,7 +109,7 @@ CREATE TABLE license_device_bindings (
     KEY ix_binding_device (device_id),
     CONSTRAINT fk_binding_license_owner FOREIGN KEY (license_id, user_id) REFERENCES licenses(id, user_id),
     CONSTRAINT fk_binding_device_owner FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id),
-    CONSTRAINT fk_binding_replacement FOREIGN KEY (replaced_by) REFERENCES license_device_bindings(id),
+    CONSTRAINT fk_binding_replacement_owner FOREIGN KEY (replaced_by, user_id) REFERENCES license_device_bindings(id, user_id),
     CONSTRAINT chk_binding_slot_positive CHECK (slot_ordinal > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -155,7 +155,12 @@ CREATE TABLE account_recovery_cases (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- +goose StatementBegin
-CREATE TRIGGER trial_entitlements_no_update BEFORE UPDATE ON trial_entitlements FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'trial_entitlements is append-only';
+CREATE TRIGGER trial_entitlements_no_update BEFORE UPDATE ON trial_entitlements FOR EACH ROW
+BEGIN
+    IF NOT (NEW.id <=> OLD.id) OR NOT (NEW.user_id <=> OLD.user_id) OR NOT (NEW.started_at <=> OLD.started_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'trial entitlement identity is immutable';
+    END IF;
+END;
 -- +goose StatementEnd
 -- +goose StatementBegin
 CREATE TRIGGER trial_entitlements_no_delete BEFORE DELETE ON trial_entitlements FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'trial_entitlements is append-only';
