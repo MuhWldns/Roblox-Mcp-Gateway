@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"robloxkit/internal/mcpprocess"
@@ -109,10 +110,22 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		return emitFatal(emit, "MCP_PROCESS_UNAVAILABLE", "Official Roblox MCP could not be started.", err)
 	}
 	started = true
+	var lifecycle struct {
+		sync.Mutex
+		exited bool
+		err    error
+	}
 	waitResult := make(chan error, 1)
-	go func() { waitResult <- deps.Process.Wait() }()
+	go func() {
+		err := deps.Process.Wait()
+		lifecycle.Lock()
+		lifecycle.exited = true
+		lifecycle.err = err
+		lifecycle.Unlock()
+		waitResult <- err
+	}()
 
-	request := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{}}`, initializeRequestID))
+	request := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"RobloxBridge","version":"1.0.0"}}}`, initializeRequestID))
 	if err := deps.Process.Send(ctx, request); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -156,7 +169,7 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 	if err != nil {
 		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP has no safe read-only tool.", err)
 	}
-	safeCall := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":{}}}`, safeCallRequestID, readOnlyTool))
+	safeCall := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":{"text":"RobloxBridge readiness probe"}}}`, safeCallRequestID, readOnlyTool))
 	if err := deps.Process.Send(ctx, safeCall); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -197,6 +210,16 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		return emitReconnect(emit, deps.RetryBackoff, err)
 	case result := <-readinessResult:
+		// If both channels become ready together, prefer a child exit so a
+		// dead MCP cannot be reported as a Studio-only failure.
+		select {
+		case childErr := <-waitResult:
+			if childErr == nil {
+				childErr = errors.New("MCP process exited unexpectedly")
+			}
+			return emitReconnect(emit, deps.RetryBackoff, childErr)
+		default:
+		}
 		if result.err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -205,19 +228,20 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		studioCount = result.count
 	}
-	// Prefer an already-completed child exit over entering Connected. This
-	// closes the race where StudioReady returns just as the MCP child dies.
-	select {
-	case err := <-waitResult:
-		if err == nil {
-			err = errors.New("MCP process exited unexpectedly")
+	lifecycle.Lock()
+	if lifecycle.exited {
+		childErr := lifecycle.err
+		lifecycle.Unlock()
+		if childErr == nil {
+			childErr = errors.New("MCP process exited unexpectedly")
 		}
-		return emitReconnect(emit, deps.RetryBackoff, err)
-	default:
+		return emitReconnect(emit, deps.RetryBackoff, childErr)
 	}
 	if err := emit(statusui.Event{State: statusui.Connected, DeviceName: deps.DeviceName, StudioCount: studioCount}, true); err != nil {
+		lifecycle.Unlock()
 		return err
 	}
+	lifecycle.Unlock()
 
 	select {
 	case <-ctx.Done():
