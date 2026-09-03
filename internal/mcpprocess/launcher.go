@@ -70,7 +70,7 @@ func (l Launcher) Resolve() (Command, error) {
 }
 
 func quoteBatchPath(path string) string {
-	return `"` + strings.ReplaceAll(path, `"`, `""`) + `"`
+	return `""` + strings.ReplaceAll(path, `"`, `""`) + `""`
 }
 
 func canonicalFile(path string) (string, error) {
