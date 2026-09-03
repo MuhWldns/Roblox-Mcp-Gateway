@@ -71,6 +71,7 @@ func respond(frame []byte) []byte {
 				map[string]any{
 					"name":        "echo",
 					"description": "Echoes text",
+					"annotations": map[string]any{"readOnlyHint": true},
 					"inputSchema": map[string]any{
 						"type":     "object",
 						"required": []string{"text"},
