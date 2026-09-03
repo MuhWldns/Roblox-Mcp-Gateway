@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -85,6 +86,42 @@ func TestRendererPrintsDegradedSafeError(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Errorf("degraded output missing %q\noutput:\n%s", want, plain)
 		}
+	}
+}
+
+func TestRendererPrintsActionableDegradedRecovery(t *testing.T) {
+	plain := renderPlainEvent(t, Event{
+		State:       Degraded,
+		Code:        "STUDIO_SESSION_UNAVAILABLE",
+		SafeMessage: "No Roblox Studio session is available.",
+	})
+
+	if !strings.Contains(plain, "Action : Open Roblox Studio, then retry the connection.") {
+		t.Errorf("degraded output missing actionable recovery line\noutput:\n%s", plain)
+	}
+}
+
+func TestRendererSanitizesCallerFieldsAtOutputBoundary(t *testing.T) {
+	const hostile = "BAD\nCODE\x1b[31m\x00"
+	output := renderEvent(t, Event{
+		State:       Connected,
+		DeviceName:  hostile,
+		StudioCount: 1,
+	})
+	if strings.Contains(output, hostile) {
+		t.Fatalf("connected output emitted hostile device name raw: %q", output)
+	}
+
+	output = renderEvent(t, Event{
+		State:       Degraded,
+		Code:        hostile,
+		SafeMessage: hostile,
+	})
+	if strings.Contains(output, hostile) {
+		t.Fatalf("degraded output emitted hostile caller fields raw: %q", output)
+	}
+	if strings.IndexFunc(strings.ReplaceAll(output, "\n", ""), unicode.IsControl) >= 0 {
+		t.Fatalf("renderer output contains injected control characters: %q", output)
 	}
 }
 

@@ -3,6 +3,8 @@ package statusui
 import (
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
 )
 
 // Renderer writes concise, plain-text-safe terminal status. It intentionally
@@ -48,7 +50,7 @@ func renderConnected(w io.Writer, event Event) error {
 		studio = "1 session connected"
 	}
 
-	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nPress Ctrl+C to stop.\n", event.DeviceName, studio)
+	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nPress Ctrl+C to stop.\n", sanitizeTerminalField(event.DeviceName), studio)
 	return err
 }
 
@@ -58,14 +60,30 @@ func renderReconnecting(w io.Writer, event Event) error {
 }
 
 func renderProblem(w io.Writer, heading string, event Event) error {
-	if _, err := fmt.Fprintf(w, "%s\nCode   : %s\nMessage: %s\n", heading, event.Code, event.SafeMessage); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\nCode   : %s\nMessage: %s\n", heading, sanitizeTerminalField(event.Code), sanitizeTerminalField(event.SafeMessage)); err != nil {
 		return err
 	}
 	if event.State != Fatal {
-		return nil
+		_, err := fmt.Fprintf(w, "Action : Open Roblox Studio, then retry the connection.\n")
+		return err
 	}
 	_, err := fmt.Fprintf(w, "Action : %s\n", fatalAction(event.Code))
 	return err
+}
+
+// sanitizeTerminalField is the final output boundary for caller-provided
+// fields. Printable runes preserve normal safe text; control runes (including
+// newlines and ANSI escape introducers) are omitted so fields cannot inject
+// terminal commands or additional status lines.
+func sanitizeTerminalField(value string) string {
+	var sanitized strings.Builder
+	sanitized.Grow(len(value))
+	for _, r := range value {
+		if unicode.IsPrint(r) {
+			sanitized.WriteRune(r)
+		}
+	}
+	return sanitized.String()
 }
 
 func fatalAction(code string) string {
