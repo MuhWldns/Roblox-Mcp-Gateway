@@ -36,7 +36,7 @@ CREATE TABLE trial_entitlements (
     extension_reason VARCHAR(500) NULL,
     extended_by CHAR(36) NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id), UNIQUE KEY uq_trial_entitlements_user (user_id), UNIQUE KEY uq_trial_entitlements_id_user (id, user_id),
     CONSTRAINT fk_trial_entitlements_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_trial_entitlements_extended_by FOREIGN KEY (extended_by) REFERENCES users(id)
@@ -157,8 +157,13 @@ CREATE TABLE account_recovery_cases (
 -- +goose StatementBegin
 CREATE TRIGGER trial_entitlements_no_update BEFORE UPDATE ON trial_entitlements FOR EACH ROW
 BEGIN
-    IF NOT (NEW.id <=> OLD.id) OR NOT (NEW.user_id <=> OLD.user_id) OR NOT (NEW.started_at <=> OLD.started_at) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'trial entitlement identity is immutable';
+    IF NOT (NEW.id <=> OLD.id)
+        OR NOT (NEW.user_id <=> OLD.user_id)
+        OR NOT (NEW.started_at <=> OLD.started_at)
+        OR NOT (NEW.created_at <=> OLD.created_at)
+        OR NOT (NEW.updated_at <=> OLD.updated_at)
+        OR NOT (NEW.ends_at > OLD.ends_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'trial entitlement updates require a later expiry and preserve immutable fields';
     END IF;
 END;
 -- +goose StatementEnd

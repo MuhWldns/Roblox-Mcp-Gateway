@@ -66,6 +66,7 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	assertCompositeForeignKey(t, db, "device_credentials", "device_id", "user_id")
 	assertCompositeForeignKey(t, db, "device_enrollment_codes", "device_id", "user_id")
 	assertCompositeForeignKey(t, db, "usage_records", "device_id", "user_id")
+
 	assertCompositeForeignKey(t, db, "usage_records", "studio_session_id", "user_id")
 	assertCompositeForeignKey(t, db, "oauth_refresh_tokens", "parent_id", "user_id")
 	assertTrigger(t, db, "trial_entitlements_no_update")
@@ -75,6 +76,7 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	assertTrialTablesAppendOnly(t, db)
 	assertCrossTenantBindingRejected(t, db)
 	assertCrossTenantLineageRejected(t, db)
+	assertUsageOwnerConstraints(t, db)
 	version, err := Migrate(ctx, db, "version")
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
@@ -197,19 +199,47 @@ func assertTrialTablesAppendOnly(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("insert trial test user: %v", err)
 	}
-	_, err = db.ExecContext(t.Context(), `INSERT INTO trial_entitlements (id, user_id, started_at, ends_at) VALUES ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO trial_entitlements (id, user_id, started_at, ends_at) VALUES ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', UTC_TIMESTAMP(6), DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 1 DAY))`)
 	if err != nil {
 		t.Fatalf("insert trial entitlement: %v", err)
 	}
-	_, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET started_at = DATE_ADD(started_at, INTERVAL 1 DAY) WHERE id = '00000000-0000-0000-0000-000000000011'`)
-	if err == nil {
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET started_at = DATE_ADD(started_at, INTERVAL 1 DAY) WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
 		t.Fatal("trial entitlement started_at update unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET ends_at = DATE_SUB(ends_at, INTERVAL 1 HOUR) WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement ends_at shortening unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET extension_reason = 'unapproved metadata mutation' WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement metadata-only update unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET created_at = DATE_SUB(created_at, INTERVAL 1 SECOND), ends_at = DATE_ADD(ends_at, INTERVAL 1 DAY) WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement created_at mutation unexpectedly succeeded")
+	}
+	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET updated_at = DATE_ADD(updated_at, INTERVAL 1 DAY), ends_at = DATE_ADD(ends_at, INTERVAL 1 DAY) WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
+		t.Fatal("trial entitlement updated_at mutation unexpectedly succeeded")
 	}
 	if _, err = db.ExecContext(t.Context(), `UPDATE trial_entitlements SET ends_at = DATE_ADD(ends_at, INTERVAL 1 DAY), extension_reason = 'admin extension', extended_by = user_id WHERE id = '00000000-0000-0000-0000-000000000011'`); err != nil {
 		t.Fatalf("trial entitlement ends_at extension failed: %v", err)
 	}
 	if _, err = db.ExecContext(t.Context(), `DELETE FROM trial_entitlements WHERE id = '00000000-0000-0000-0000-000000000011'`); err == nil {
 		t.Fatal("trial entitlement delete unexpectedly succeeded")
+	}
+}
+
+func assertUsageOwnerConstraints(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var nullable string
+	if err := db.QueryRowContext(t.Context(), `SELECT is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'usage_records' AND column_name = 'user_id'`).Scan(&nullable); err != nil {
+		t.Fatalf("inspect usage_records.user_id nullability: %v", err)
+	}
+	if nullable != "NO" {
+		t.Fatalf("usage_records.user_id is_nullable = %q, want NO", nullable)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO usage_records (id, user_id, operation, outcome) VALUES ('00000000-0000-0000-0000-000000000077', NULL, 'test', 'ok')`); err == nil {
+		t.Fatal("usage record with NULL user_id unexpectedly succeeded")
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO usage_records (id, user_id, device_id, operation, outcome) VALUES ('00000000-0000-0000-0000-000000000078', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000022', 'test', 'ok')`); err == nil {
+		t.Fatal("cross-tenant usage record unexpectedly succeeded")
 	}
 }
 

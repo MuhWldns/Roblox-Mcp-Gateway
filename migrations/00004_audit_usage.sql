@@ -19,7 +19,7 @@ CREATE TABLE audit_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE usage_records (
-    id CHAR(36) NOT NULL, user_id CHAR(36) NULL, device_id CHAR(36) NULL, studio_session_id CHAR(36) NULL,
+    id CHAR(36) NOT NULL, user_id CHAR(36) NOT NULL, device_id CHAR(36) NULL, studio_session_id CHAR(36) NULL,
     operation VARCHAR(128) NOT NULL, outcome VARCHAR(64) NOT NULL, units BIGINT UNSIGNED NOT NULL DEFAULT 1,
     request_id VARCHAR(255) NULL, metadata JSON NULL, occurred_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id), KEY ix_usage_user_occurred (user_id, occurred_at), KEY ix_usage_device (device_id),
