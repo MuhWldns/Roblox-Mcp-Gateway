@@ -1,6 +1,7 @@
 package bridgeapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,10 +117,10 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		err    error
 	}
 	waitResult := make(chan error, 1)
+	waitDone := make(chan struct{})
 	go func() {
 		err := deps.Process.Wait()
-		// This mutex is the final readiness gate: either the waiter publishes
-		// exit first, or Connected owns the gate before the waiter can publish.
+		close(waitDone)
 		lifecycle.Lock()
 		lifecycle.err = err
 		lifecycle.exited = true
@@ -237,7 +238,19 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		studioCount = result.count
 	}
+	// The waiter closes waitDone at the exact Process.Wait return point. Once
+	// this gate is entered, a completed child is always observed before emit.
 	lifecycle.Lock()
+	select {
+	case <-waitDone:
+		childErr := lifecycle.err
+		lifecycle.Unlock()
+		if childErr == nil {
+			childErr = errors.New("MCP process exited unexpectedly")
+		}
+		return emitReconnect(emit, deps.RetryBackoff, childErr)
+	default:
+	}
 	if lifecycle.exited {
 		childErr := lifecycle.err
 		lifecycle.Unlock()
@@ -325,14 +338,33 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 		return "", nil, fmt.Errorf("decode tools/list result: %w", err)
 	}
 	for _, tool := range payload.Tools {
-		if tool.Name == "" || !tool.Annotations.ReadOnlyHint {
+		if tool.Name == "" || !tool.Annotations.ReadOnlyHint || tool.InputSchema == nil {
 			continue
 		}
+		if typ, ok := tool.InputSchema["type"].(string); !ok || typ != "object" {
+			continue
+		}
+		properties, ok := tool.InputSchema["properties"].(map[string]any)
+		if !ok {
+			properties = map[string]any{}
+		}
 		args := make(map[string]any)
-		properties, _ := tool.InputSchema["properties"].(map[string]any)
-		required, _ := tool.InputSchema["required"].([]any)
+		valid := true
 		for key, raw := range properties {
-			property, _ := raw.(map[string]any)
+			property, ok := raw.(map[string]any)
+			if !ok {
+				valid = false
+				break
+			}
+			for _, constraint := range []string{"pattern", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minItems", "maxItems", "uniqueItems", "const"} {
+				if _, exists := property[constraint]; exists {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				break
+			}
 			switch property["type"] {
 			case "string":
 				args[key] = "RobloxBridge readiness probe"
@@ -340,23 +372,37 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 				args[key] = false
 			case "number", "integer":
 				args[key] = 0
+			default:
+				valid = false
+			}
+			if enum, exists := property["enum"]; exists {
+				values, ok := enum.([]any)
+				if !ok || len(values) == 0 {
+					valid = false
+				} else {
+					args[key] = values[0]
+				}
 			}
 		}
-		valid := true
-		for _, raw := range required {
-			key, ok := raw.(string)
-			if !ok || properties[key] == nil {
-				valid = false
-				break
-			}
-			if _, ok := args[key]; !ok {
-				valid = false
-				break
+		if !valid {
+			continue
+		}
+		if required, ok := tool.InputSchema["required"].([]any); ok {
+			for _, raw := range required {
+				key, ok := raw.(string)
+				if !ok {
+					valid = false
+					break
+				}
+				if _, exists := args[key]; !exists {
+					valid = false
+					break
+				}
 			}
 		}
 		if additional, ok := tool.InputSchema["additionalProperties"].(bool); ok && !additional {
 			for key := range args {
-				if properties[key] == nil {
+				if _, exists := properties[key]; !exists {
 					valid = false
 				}
 			}
@@ -369,6 +415,10 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 }
 
 func validateSafeCallResult(result json.RawMessage) error {
+	result = bytes.TrimSpace(result)
+	if len(result) == 0 || result[0] != '{' {
+		return errors.New("tools/call result must be an object")
+	}
 	var payload struct {
 		IsError bool `json:"isError"`
 	}
