@@ -45,11 +45,11 @@ func LoadServer(getenv func(string) string) (Server, error) {
 	var config Server
 	var validationErrors []error
 
-	config.PublicAppURL = parseURL(getenv, "PUBLIC_APP_URL", "", &validationErrors)
-	config.MCPResourceURL = parseURL(getenv, "MCP_RESOURCE_URL", "", &validationErrors)
-	config.ListenAddress = required(getenv, "LISTEN_ADDRESS", &validationErrors)
-	config.MySQLDSN = required(getenv, "MYSQL_DSN", &validationErrors)
-	config.AllowedOrigin = parseURL(getenv, "ALLOWED_ORIGIN", "", &validationErrors)
+    config.PublicAppURL = parseURL(getenv, "PUBLIC_APP_URL", "https", &validationErrors)
+    config.MCPResourceURL = parseURL(getenv, "MCP_RESOURCE_URL", "https", &validationErrors)
+    config.ListenAddress = required(getenv, "LISTEN_ADDRESS", &validationErrors)
+    config.MySQLDSN = required(getenv, "MYSQL_DSN", &validationErrors)
+    config.AllowedOrigin = parseURL(getenv, "ALLOWED_ORIGIN", "https", &validationErrors)
 	config.TrustedProxies = parseList(getenv, "TRUSTED_PROXIES", &validationErrors)
 	config.TokenPepper = required(getenv, "TOKEN_PEPPER", &validationErrors)
 	config.HTTPReadTimeout = parseDuration(getenv, "HTTP_READ_TIMEOUT", &validationErrors)

@@ -87,6 +87,42 @@ func TestLoadServerRejectsInvalidURLsDurationsAndLimits(t *testing.T) {
 		})
 	}
 }
+func TestLoadServerRejectsNonHTTPSPublicURLs(t *testing.T) {
+	tests := []struct {
+		setting string
+		scheme  string
+	}{
+		{setting: "PUBLIC_APP_URL", scheme: "http"},
+		{setting: "PUBLIC_APP_URL", scheme: "ftp"},
+		{setting: "PUBLIC_APP_URL", scheme: "file"},
+		{setting: "MCP_RESOURCE_URL", scheme: "http"},
+		{setting: "MCP_RESOURCE_URL", scheme: "ftp"},
+		{setting: "MCP_RESOURCE_URL", scheme: "file"},
+		{setting: "ALLOWED_ORIGIN", scheme: "http"},
+		{setting: "ALLOWED_ORIGIN", scheme: "ftp"},
+		{setting: "ALLOWED_ORIGIN", scheme: "file"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.setting+"/"+tt.scheme, func(t *testing.T) {
+			env := validServerEnv()
+			env[tt.setting] = tt.scheme + "://example.test"
+
+			_, err := LoadServer(envGetter(env))
+			if err == nil {
+				t.Fatalf("LoadServer() error = nil for %s=%q", tt.setting, env[tt.setting])
+			}
+			message := err.Error()
+			if !strings.Contains(message, tt.setting) {
+				t.Errorf("LoadServer() error = %q, want setting name %s", message, tt.setting)
+			}
+			if !strings.Contains(message, "https") {
+				t.Errorf("LoadServer() error = %q, want HTTPS requirement", message)
+			}
+		})
+	}
+}
+
 
 func TestLoadServerAggregatesIndependentValidationFailures(t *testing.T) {
 	env := validServerEnv()
