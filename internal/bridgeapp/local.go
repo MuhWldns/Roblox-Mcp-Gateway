@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"robloxkit/internal/mcpprocess"
@@ -113,21 +112,20 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 	started = true
 	var lifecycle struct {
 		sync.Mutex
-		exited atomic.Bool
+		exited bool
 		err    error
 	}
 	waitResult := make(chan error, 1)
 	go func() {
 		err := deps.Process.Wait()
-		// Publish liveness before taking the bookkeeping lock so a return from
-		// Wait cannot be hidden behind the lock held during Connected emission.
-		lifecycle.exited.Store(true)
+		// This mutex is the final readiness gate: either the waiter publishes
+		// exit first, or Connected owns the gate before the waiter can publish.
 		lifecycle.Lock()
 		lifecycle.err = err
+		lifecycle.exited = true
 		lifecycle.Unlock()
 		waitResult <- err
 	}()
-
 	request := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"RobloxBridge","version":"1.0.0"}}}`, initializeRequestID))
 	if err := deps.Process.Send(ctx, request); err != nil {
 		if ctx.Err() != nil {
@@ -168,24 +166,32 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP initialization failed.", err)
 	}
-	readOnlyTool, err := findReadOnlyTool(toolsFrame)
+	readOnlyTool, probeArgs, err := findReadOnlyTool(toolsFrame)
 	if err != nil {
-		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP has no safe read-only tool.", err)
+		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP has no schema-compatible read-only tool.", err)
 	}
-	safeCall := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":{"text":"RobloxBridge readiness probe"}}}`, safeCallRequestID, readOnlyTool))
+	argsJSON, err := json.Marshal(probeArgs)
+	if err != nil {
+		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP readiness call failed.", err)
+	}
+	safeCall := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, safeCallRequestID, readOnlyTool, argsJSON))
 	if err := deps.Process.Send(ctx, safeCall); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP readiness call failed.", err)
 	}
-	if _, err := receiveResponseFrame(ctx, deps.Process.Responses(), waitResult, deps.ResponseTimeout, safeCallRequestID); err != nil {
+	safeResult, err := receiveResponseFrame(ctx, deps.Process.Responses(), waitResult, deps.ResponseTimeout, safeCallRequestID)
+	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if errors.Is(err, errChildExited) {
 			return emitReconnect(emit, deps.RetryBackoff, err)
 		}
+		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP readiness call failed.", err)
+	}
+	if err := validateSafeCallResult(safeResult); err != nil {
 		return emitFatal(emit, "MCP_INITIALIZATION_FAILED", "Official Roblox MCP readiness call failed.", err)
 	}
 
@@ -231,19 +237,8 @@ func RunLocal(ctx context.Context, deps LocalDeps) error {
 		}
 		studioCount = result.count
 	}
-	if lifecycle.exited.Load() {
-		lifecycle.Lock()
-		childErr := lifecycle.err
-		lifecycle.Unlock()
-		if childErr == nil {
-			childErr = errors.New("MCP process exited unexpectedly")
-		}
-		return emitReconnect(emit, deps.RetryBackoff, childErr)
-	}
-	// Keep the lifecycle lock through the readiness event. The waiter cannot
-	// publish an exit between this liveness check and Connected emission.
 	lifecycle.Lock()
-	if lifecycle.exited.Load() {
+	if lifecycle.exited {
 		childErr := lifecycle.err
 		lifecycle.Unlock()
 		if childErr == nil {
@@ -316,24 +311,74 @@ func receiveResponse(ctx context.Context, responses <-chan json.RawMessage, wait
 	return err
 }
 
-func findReadOnlyTool(result json.RawMessage) (string, error) {
+func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 	var payload struct {
 		Tools []struct {
-			Name        string `json:"name"`
+			Name        string         `json:"name"`
+			InputSchema map[string]any `json:"inputSchema"`
 			Annotations struct {
 				ReadOnlyHint bool `json:"readOnlyHint"`
 			} `json:"annotations"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(result, &payload); err != nil {
-		return "", fmt.Errorf("decode tools/list result: %w", err)
+		return "", nil, fmt.Errorf("decode tools/list result: %w", err)
 	}
 	for _, tool := range payload.Tools {
-		if tool.Name != "" && tool.Annotations.ReadOnlyHint {
-			return tool.Name, nil
+		if tool.Name == "" || !tool.Annotations.ReadOnlyHint {
+			continue
+		}
+		args := make(map[string]any)
+		properties, _ := tool.InputSchema["properties"].(map[string]any)
+		required, _ := tool.InputSchema["required"].([]any)
+		for key, raw := range properties {
+			property, _ := raw.(map[string]any)
+			switch property["type"] {
+			case "string":
+				args[key] = "RobloxBridge readiness probe"
+			case "boolean":
+				args[key] = false
+			case "number", "integer":
+				args[key] = 0
+			}
+		}
+		valid := true
+		for _, raw := range required {
+			key, ok := raw.(string)
+			if !ok || properties[key] == nil {
+				valid = false
+				break
+			}
+			if _, ok := args[key]; !ok {
+				valid = false
+				break
+			}
+		}
+		if additional, ok := tool.InputSchema["additionalProperties"].(bool); ok && !additional {
+			for key := range args {
+				if properties[key] == nil {
+					valid = false
+				}
+			}
+		}
+		if valid {
+			return tool.Name, args, nil
 		}
 	}
-	return "", errors.New("tools/list returned no read-only tool")
+	return "", nil, errors.New("tools/list returned no schema-compatible read-only tool")
+}
+
+func validateSafeCallResult(result json.RawMessage) error {
+	var payload struct {
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return fmt.Errorf("decode tools/call result: %w", err)
+	}
+	if payload.IsError {
+		return errors.New("tools/call returned an application error")
+	}
+	return nil
 }
 
 func emitFatal(emit func(statusui.Event, bool) error, code, message string, cause error) error {

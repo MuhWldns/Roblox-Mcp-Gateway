@@ -25,6 +25,7 @@ type fakeProcess struct {
 	crashCh          chan error
 	sent             chan json.RawMessage
 	strictProtocol   bool
+	applicationError bool
 	waitReturned     chan struct{}
 	mu               sync.Mutex
 }
@@ -82,7 +83,11 @@ func (p *fakeProcess) Send(_ context.Context, frame json.RawMessage) error {
 		case "tools/list":
 			result = json.RawMessage(`{"tools":[{"name":"echo","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}}]}`)
 		case "tools/call":
-			result = json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`)
+			if p.applicationError {
+				result = json.RawMessage(`{"isError":true,"content":[{"type":"text","text":"readiness failed"}]}`)
+			} else {
+				result = json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`)
+			}
 		}
 		p.responses <- json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, result))
 	}
@@ -100,6 +105,7 @@ func (p *fakeProcess) Stop(context.Context) error {
 	return nil
 }
 func (p *fakeProcess) Wait() error {
+	defer close(p.waitReturned)
 	select {
 	case err := <-p.crashCh:
 		return err
@@ -352,6 +358,21 @@ func TestRunLocalStudioErrorYieldsToChildExit(t *testing.T) {
 	for _, event := range events {
 		if event.State == statusui.Fatal || event.State == statusui.Connected {
 			t.Fatalf("event %q emitted after child exit", event.State)
+		}
+	}
+}
+
+func TestRunLocalRejectsApplicationLevelSafeCallError(t *testing.T) {
+	p := newFakeProcess()
+	p.applicationError = true
+	var events []statusui.Event
+	err := RunLocal(context.Background(), LocalDeps{Machine: statusui.NewMachine(), Process: p, Output: io.Discard, StudioReady: func(context.Context) (int, error) { return 1, nil }, EventSink: func(e statusui.Event) error { events = append(events, e); return nil }})
+	if err == nil {
+		t.Fatal("RunLocal() error = nil, want application-level safe-call failure")
+	}
+	for _, event := range events {
+		if event.State == statusui.Connected {
+			t.Fatal("connected emitted for application-level safe-call error")
 		}
 	}
 }
