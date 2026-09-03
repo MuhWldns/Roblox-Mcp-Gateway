@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 )
+
 func validateRequest(frame json.RawMessage) error {
 	object, err := decodeObject(frame)
 	if err != nil {

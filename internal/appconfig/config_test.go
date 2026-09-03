@@ -123,7 +123,6 @@ func TestLoadServerRejectsNonHTTPSPublicURLs(t *testing.T) {
 	}
 }
 
-
 func TestLoadServerAggregatesIndependentValidationFailures(t *testing.T) {
 	env := validServerEnv()
 	env["PUBLIC_APP_URL"] = "://bad"
