@@ -69,6 +69,7 @@ function renderAt(path: string, element: React.ReactElement) {
 const devicesUrl = "GET /api/v1/devices";
 const renameUrl = "POST /api/v1/devices/device-1/rename";
 const revokeUrl = "POST /api/v1/devices/device-1/revoke";
+const rotateCredentialUrl = "POST /api/v1/devices/device-1/rotate-credential";
 const studiosUrl = "GET /api/v1/studios";
 const diagnosticsUrl = "GET /api/v1/diagnostics";
 const csrfUrl = "GET /api/v1/csrf";
@@ -78,6 +79,13 @@ const deviceOnline = {
   name: "Laptop A",
   status: "active",
   online: true,
+  hostname: "studio-laptop",
+  platform: "windows-amd64",
+  bridge_version: "bridge-2026.09",
+  last_heartbeat_at: "2026-09-04T10:59:30Z",
+  official_mcp_state: "ready",
+  reconnect_count: 3,
+  last_error: "Connection reset; retry scheduled",
   created_at: "2026-09-01T10:00:00Z",
   updated_at: "2026-09-04T10:00:00Z",
 };
@@ -86,6 +94,13 @@ const deviceOffline = {
   name: "Desktop B",
   status: "active",
   online: false,
+  hostname: null,
+  platform: null,
+  bridge_version: null,
+  last_heartbeat_at: null,
+  official_mcp_state: null,
+  reconnect_count: 0,
+  last_error: null,
   created_at: "2026-09-02T10:00:00Z",
   updated_at: "2026-09-03T10:00:00Z",
 };
@@ -94,6 +109,13 @@ const deviceRevoked = {
   name: "Old PC",
   status: "revoked",
   online: false,
+  hostname: "old-pc",
+  platform: "windows-amd64",
+  bridge_version: "bridge-2026.08",
+  last_heartbeat_at: "2026-09-03T08:59:00Z",
+  official_mcp_state: "stopped",
+  reconnect_count: 8,
+  last_error: null,
   created_at: "2026-08-30T10:00:00Z",
   updated_at: "2026-09-03T09:00:00Z",
 };
@@ -118,6 +140,28 @@ const diagnostics = {
   devices_registered: 2,
   devices_online: 1,
   studio_sessions_active: 1,
+  devices: [
+    {
+      id: "device-1",
+      name: "Laptop A",
+      status: "active",
+      online: true,
+      last_heartbeat_at: "2026-09-04T10:59:30Z",
+      official_mcp_state: "ready",
+      reconnect_count: 3,
+      last_error: "Connection reset; retry scheduled",
+    },
+    {
+      id: "device-2",
+      name: "Desktop B",
+      status: "active",
+      online: false,
+      last_heartbeat_at: null,
+      official_mcp_state: null,
+      reconnect_count: 0,
+      last_error: null,
+    },
+  ],
 };
 
 describe("devices screen", () => {
@@ -143,6 +187,41 @@ describe("devices screen", () => {
     expect(within(screen.getByTestId("device-device-1")).getByText("Active")).toBeTruthy();
     expect(within(screen.getByTestId("device-device-2")).getByText("Offline")).toBeTruthy();
     expect(within(screen.getByTestId("device-device-3")).getByText("Revoked")).toBeTruthy();
+  });
+
+  it("renders bridge identity and operational details with explicit unavailable states", async () => {
+    installFetch({
+      [devicesUrl]: { json: { devices: [deviceOnline, deviceOffline] } },
+    });
+
+    renderAt("/devices", <Devices />);
+
+    const online = await screen.findByTestId("device-device-1");
+    expect(within(online).getByTestId("device-hostname").textContent).toBe("studio-laptop");
+    expect(within(online).getByTestId("device-platform").textContent).toBe("windows-amd64");
+    expect(within(online).getByTestId("device-bridge-version").textContent).toBe(
+      "bridge-2026.09",
+    );
+    expect(within(online).getByTestId("device-last-heartbeat").textContent).toContain(
+      "2026-09-04",
+    );
+    expect(within(online).getByTestId("device-mcp-state").textContent).toMatch(/ready/i);
+    expect(within(online).getByTestId("device-reconnect-count").textContent).toBe("3");
+    expect(within(online).getByTestId("device-last-error").textContent).toBe(
+      "Connection reset; retry scheduled",
+    );
+
+    const offline = screen.getByTestId("device-device-2");
+    expect(within(offline).getByTestId("device-hostname").textContent).toBe("Unavailable");
+    expect(within(offline).getByTestId("device-platform").textContent).toBe("Unavailable");
+    expect(within(offline).getByTestId("device-bridge-version").textContent).toBe(
+      "Unavailable",
+    );
+    expect(within(offline).getByTestId("device-last-heartbeat").textContent).toBe(
+      "Unavailable",
+    );
+    expect(within(offline).getByTestId("device-mcp-state").textContent).toBe("Unavailable");
+    expect(within(offline).getByTestId("device-last-error").textContent).toBe("None reported");
   });
 
   it("shows an empty state instead of a blank list before any enrollment", async () => {
@@ -220,6 +299,66 @@ describe("devices screen", () => {
     });
   });
 
+  it("rotates a credential through CSRF and keeps the returned secret in memory only", async () => {
+    const localStorage = { getItem: vi.fn(), setItem: vi.fn() };
+    const sessionStorage = { getItem: vi.fn(), setItem: vi.fn() };
+    vi.stubGlobal("localStorage", localStorage);
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const calls = installFetch({
+      [devicesUrl]: { json: { devices: [deviceOnline] } },
+      [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
+      [rotateCredentialUrl]: {
+        json: { device_id: "device-1", device_credential: "rkd_rotated_once_123456" },
+      },
+    });
+
+    const view = renderAt("/devices", <Devices />);
+    await screen.findByText("Laptop A");
+    await userEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+    const dialog = screen.getByRole("dialog", { name: "Rotate this credential?" });
+    expect(dialog.textContent).toMatch(/invalidates the current credential/i);
+    expect(dialog.textContent).toMatch(/disconnect/i);
+    await userEvent.click(screen.getByRole("button", { name: "Yes, rotate credential" }));
+
+    const credential = await screen.findByTestId("rotated-credential");
+    expect(credential.textContent).toBe("rkd_rotated_once_123456");
+    expect(screen.getByTestId("credential-once-warning").textContent).toMatch(
+      /copy and store.*now.*not be shown again/i,
+    );
+    const rotation = calls.find(
+      (call) => call.path === "/api/v1/devices/device-1/rotate-credential",
+    );
+    expect(rotation?.headers["x-csrf-token"]).toBe("csrf-token-1");
+    expect(rotation?.body).toBeUndefined();
+    expect(localStorage.getItem).not.toHaveBeenCalled();
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem).not.toHaveBeenCalled();
+    expect(sessionStorage.setItem).not.toHaveBeenCalled();
+
+    view.unmount();
+    renderAt("/devices", <Devices />);
+    await screen.findByText("Laptop A");
+    expect(screen.queryByTestId("rotated-credential")).toBeNull();
+  });
+
+  it("shows a recoverable error when credential rotation fails", async () => {
+    installFetch({
+      [devicesUrl]: { json: { devices: [deviceOnline] } },
+      [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
+      [rotateCredentialUrl]: { status: 500 },
+    });
+
+    renderAt("/devices", <Devices />);
+    await screen.findByText("Laptop A");
+    await userEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, rotate credential" }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /Rotating the credential failed.*existing credential is still active.*try again/i,
+    );
+    expect(screen.queryByTestId("rotated-credential")).toBeNull();
+  });
+
   it("never renders token or credential values in the DOM", async () => {
     installFetch({
       [devicesUrl]: { json: { devices: [deviceOnline] } },
@@ -280,6 +419,24 @@ describe("diagnostics screen", () => {
     expect(screen.getByTestId("diagnostics-devices-registered").textContent).toBe("2");
     expect(screen.getByTestId("diagnostics-devices-online").textContent).toBe("1");
     expect(screen.getByTestId("diagnostics-studios-active").textContent).toBe("1");
+  });
+
+  it("renders sanitized per-device operational diagnostics and unavailable states", async () => {
+    installFetch({ [diagnosticsUrl]: { json: diagnostics } });
+
+    renderAt("/diagnostics", <Diagnostics />);
+
+    const online = await screen.findByTestId("diagnostic-device-device-1");
+    expect(online.textContent).toMatch(/Laptop A/);
+    expect(online.textContent).toMatch(/ready/i);
+    expect(online.textContent).toContain("2026-09-04");
+    expect(online.textContent).toContain("3");
+    expect(online.textContent).toContain("Connection reset; retry scheduled");
+
+    const offline = screen.getByTestId("diagnostic-device-device-2");
+    expect(offline.textContent).toMatch(/Desktop B/);
+    expect(offline.textContent).toMatch(/Unavailable/);
+    expect(offline.textContent).toMatch(/None reported/);
   });
 
   it("keeps the page test id when the diagnostics API fails", async () => {

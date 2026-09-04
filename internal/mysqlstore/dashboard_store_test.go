@@ -162,7 +162,7 @@ func dashboardAudit(t *testing.T, db *sql.DB, action string) []audit.Event {
 func newDashboardTestStore(t *testing.T) (*DashboardStore, *sql.DB) {
 	t.Helper()
 	db := identityTestDatabase(t)
-	store := NewDashboardStore(db, audit.NewService(NewAuditStore(db)))
+	store := NewDashboardStore(db, audit.NewService(NewAuditStore(db)), []byte("test-pepper"))
 	return store, db
 }
 

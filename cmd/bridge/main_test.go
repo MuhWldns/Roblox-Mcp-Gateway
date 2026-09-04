@@ -219,3 +219,16 @@ func TestRunEnrollMinimalConfigOnlyRequiresGatewayAndCredential(t *testing.T) {
 		t.Fatalf("failed verified-TLS enrollment must not create credential path; stat err = %v", statErr)
 	}
 }
+
+// StudioReady runs only after bridgeapp has completed initialize, tools/list,
+// and a successful safe read-only tools/call against the official MCP. That
+// verified handshake proves exactly one Studio session for this release.
+func TestStudioReadyAfterVerifiedMCPCallReportsOneStudio(t *testing.T) {
+	count, err := studioReadyAfterVerifiedMCPCall(t.Context())
+	if err != nil {
+		t.Fatalf("studioReadyAfterVerifiedMCPCall() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("studioReadyAfterVerifiedMCPCall() = %d, want exactly 1", count)
+	}
+}

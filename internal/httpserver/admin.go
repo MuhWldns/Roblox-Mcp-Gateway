@@ -233,25 +233,43 @@ func (a *adminAPI) identityView(ctx context.Context, userID string) *adminIdenti
 }
 
 type adminDeviceView struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Online    bool   `json:"online"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Hostname       *string `json:"hostname"`
+	Platform       *string `json:"platform"`
+	BridgeVersion  *string `json:"bridge_version"`
+	Status         string  `json:"status"`
+	Online         bool    `json:"online"`
+	LastHeartbeat  *string `json:"last_heartbeat"`
+	MCPState       *string `json:"mcp_state"`
+	ReconnectCount int     `json:"reconnect_count"`
+	LastError      *string `json:"last_error"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 func (a *adminAPI) deviceViews(devices []dashboard.DeviceRow) []adminDeviceView {
 	views := make([]adminDeviceView, 0, len(devices))
 	for _, device := range devices {
-		views = append(views, adminDeviceView{
-			ID:        device.ID,
-			Name:      device.Name,
-			Status:    device.Status,
-			Online:    a.registry != nil && a.registry.Online(device.ID),
-			CreatedAt: device.CreatedAt.UTC().Format(timeFormat),
-			UpdatedAt: device.UpdatedAt.UTC().Format(timeFormat),
-		})
+		v := adminDeviceView{
+			ID:             device.ID,
+			Name:           device.Name,
+			Hostname:       device.Hostname,
+			Platform:       device.Platform,
+			BridgeVersion:  device.BridgeVersion,
+			Status:         device.Status,
+			Online:         a.registry != nil && a.registry.Online(device.ID),
+			MCPState:       device.MCPState,
+			ReconnectCount: device.ReconnectCount,
+			LastError:      device.LastError,
+			CreatedAt:      device.CreatedAt.UTC().Format(timeFormat),
+			UpdatedAt:      device.UpdatedAt.UTC().Format(timeFormat),
+		}
+		if device.LastHeartbeat != nil {
+			ts := device.LastHeartbeat.UTC().Format(timeFormat)
+			v.LastHeartbeat = &ts
+		}
+		views = append(views, v)
 	}
 	return views
 }
@@ -264,6 +282,12 @@ func licenseView(license *dashboard.LicenseRow) any {
 		"status":          license.Status,
 		"device_slots":    license.DeviceSlots,
 		"active_bindings": license.ActiveBindings,
+		"roblox_username": license.RobloxUsername,
+		"license_id":      license.LicenseID,
+		"subscription_id": license.SubscriptionID,
+		"subscription":    license.SubscriptionState,
+		"usage_last_30d":  license.UsageLast30Days,
+		"usage_last_7d":   license.UsageLast7Days,
 	}
 }
 

@@ -70,14 +70,34 @@ const licenseUrl = "GET /api/v1/license";
 const serverDateHeader = { date: "Fri, 04 Sep 2026 11:00:00 GMT" };
 
 const activeTrialAndLicense = {
+  owner: {
+    roblox_id_masked: "12•••••89",
+    display_name: "BuilderRoblox",
+  },
   trial: {
     active: true,
     started_at: "2026-09-04T11:00:00Z",
     ends_at: "2026-09-18T11:00:00Z",
   },
-  license: { status: "active", device_slots: 2, active_bindings: 1 },
+  license: {
+    status: "active",
+    expires_at: "2027-09-04T11:00:00Z",
+    subscription_id: "sub_masked_42",
+    device_slots: 3,
+    active_bindings: 2,
+    available_slots: 1,
+    allowed_scopes: ["mcp:connect", "studio:read"],
+    usage_limit: 10000,
+    current_usage: 245,
+    transfer_status: "not_requested",
+    recovery_status: "reviewing",
+  },
 };
 const expiredTrialNoLicense = {
+  owner: {
+    roblox_id_masked: "12•••••89",
+    display_name: "BuilderRoblox",
+  },
   trial: {
     active: false,
     started_at: "2026-08-01T11:00:00Z",
@@ -85,7 +105,14 @@ const expiredTrialNoLicense = {
   },
   license: null,
 };
-const nothingStarted = { trial: null, license: null };
+const nothingStarted = {
+  owner: {
+    roblox_id_masked: "12•••••89",
+    display_name: "BuilderRoblox",
+  },
+  trial: null,
+  license: null,
+};
 
 describe("license screen", () => {
   afterEach(() => {
@@ -115,6 +142,56 @@ describe("license screen", () => {
     expect(screen.getByTestId("license-state").textContent).toMatch(/active/i);
     expect(screen.getByTestId("license-state").textContent).toContain("2");
     expect(screen.getByTestId("license-state").textContent).toContain("1");
+  });
+
+  it("renders owner, subscription, slots, scopes, usage, transfer, and recovery details", async () => {
+    installFetch({ [licenseUrl]: { json: activeTrialAndLicense } });
+
+    renderAt("/license", <License />);
+
+    const owner = await screen.findByTestId("license-owner");
+    expect(owner.textContent).toContain("BuilderRoblox");
+    expect(owner.textContent).toContain("12•••••89");
+    expect(screen.getByTestId("license-expiry").textContent).toContain("2027-09-04");
+    expect(screen.getByTestId("license-subscription").textContent).toBe("sub_masked_42");
+    expect(screen.getByTestId("license-slots").textContent).toMatch(/3.*2.*1/);
+    expect(screen.getByTestId("license-scopes").textContent).toMatch(
+      /mcp:connect.*studio:read/,
+    );
+    expect(screen.getByTestId("license-usage").textContent).toMatch(/245.*10,000/);
+    expect(screen.getByTestId("license-transfer-status").textContent).toMatch(
+      /not requested/i,
+    );
+    expect(screen.getByTestId("license-recovery-status").textContent).toMatch(/reviewing/i);
+  });
+
+  it("renders explicit unavailable states for nullable paid-license details", async () => {
+    installFetch({
+      [licenseUrl]: {
+        json: {
+          ...activeTrialAndLicense,
+          license: {
+            ...activeTrialAndLicense.license,
+            expires_at: null,
+            subscription_id: null,
+            allowed_scopes: [],
+            usage_limit: null,
+            transfer_status: null,
+            recovery_status: null,
+          },
+        },
+      },
+    });
+
+    renderAt("/license", <License />);
+
+    await screen.findByTestId("license-state");
+    expect(screen.getByTestId("license-expiry").textContent).toBe("Unavailable");
+    expect(screen.getByTestId("license-subscription").textContent).toBe("Unavailable");
+    expect(screen.getByTestId("license-scopes").textContent).toBe("None allowed");
+    expect(screen.getByTestId("license-usage").textContent).toMatch(/245.*Unlimited/i);
+    expect(screen.getByTestId("license-transfer-status").textContent).toBe("Unavailable");
+    expect(screen.getByTestId("license-recovery-status").textContent).toBe("Unavailable");
   });
 
   it("offers an upgrade call to action when the trial has expired", async () => {

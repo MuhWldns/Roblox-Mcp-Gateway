@@ -108,7 +108,7 @@ func main() {
 	redirectURI := env("ROBLOX_REDIRECT_URI", config.PublicAppURL.String()+"/api/v1/auth/roblox/callback")
 	flow, err := robloxauth.NewFlow(robloxauth.Config{
 		ClientID:        env("ROBLOX_CLIENT_ID", ""),
-		ClientSecret:    env("ROBLOX_CLIENT_SECRET", ""),
+		ClientSecret:    config.RobloxClientSecret,
 		RedirectURI:     redirectURI,
 		ProviderBaseURL: env("ROBLOX_PROVIDER_BASE_URL", ""),
 		Issuer:          env("ROBLOX_ISSUER", ""),
@@ -149,7 +149,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	dashboard := mysqlstore.NewDashboardStore(db, auditService)
+	dashboard := mysqlstore.NewDashboardStore(db, auditService, pepper)
 	oauthStore := mysqlstore.NewOAuthStore(db)
 	// The readiness gate wraps the pool ping: while it is open, probes
 	// reflect the database; once shutdown marks it unready, every probe
@@ -216,7 +216,7 @@ func main() {
 		Admin: &httpserver.AdminConfig{
 			Entitlements: entitlements,
 			OAuth:        oauthStore,
-			AdminUsers:   strings.Split(strings.TrimSpace(env("ADMIN_USER_IDS", "")), ","),
+			AdminUsers:   splitAndTrim(env("ADMIN_USER_IDS", ""), ","),
 		},
 		Health:        probes,
 		Metadata:      &metadata,
@@ -274,4 +274,21 @@ func sessionLifetime() time.Duration {
 		return parsed
 	}
 	return defaultSessionLifetime
+}
+
+// splitAndTrim splits s by sep and trims whitespace from every element.
+// An empty input produces a nil slice, not ["\"].
+func splitAndTrim(s, sep string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

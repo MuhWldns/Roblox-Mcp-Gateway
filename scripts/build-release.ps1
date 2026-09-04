@@ -4,8 +4,8 @@
 #   bin/robloxkit-server-linux-amd64     gateway server (VPS)
 #   bin/robloxkit-migrate-linux-amd64    migration CLI (VPS)
 #   bin/RobloxBridge-windows-amd64.exe   Windows bridge
-#   bin/dist/                            frontend bundle (copy of web/dist)
-#   bin/SHA-256SUMS                      checksums for every artifact
+#   bin/BUILD-ID                        commit/version identity
+#   bin/SHA-256SUMS                     checksums for every artifact
 #
 # The release never packages .env files, logs, or node_modules: the artifact
 # list below is explicit, and every collected path is checked against the
@@ -105,12 +105,22 @@ try {
 	Invoke-Checked 'go' @('build', '-trimpath', '-buildvcs=false', '-ldflags', $ldflags,
 		'-o', (Join-Path $bin 'RobloxBridge-windows-amd64.exe'), './cmd/bridge')
 
+
+	# BUILD-ID is a manifest-covered identity that remains available on a
+	# production host without the Go toolchain. Smoke verification also
+	# compares it with the IDs embedded in all three binaries.
+	$buildIdentityPath = Join-Path $bin 'BUILD-ID'
+	[System.IO.File]::WriteAllText(
+		$buildIdentityPath,
+		("$commit/$version`n"),
+		(New-Object System.Text.UTF8Encoding($false))
+	)
 	# 4. Frontend artifacts ship inside the release.
 	New-Item -ItemType Directory -Force -Path $distOut | Out-Null
 	Copy-Item -Path (Join-Path $webDist '*') -Destination $distOut -Recurse -Force
 
 	# 5. Collect every artifact relative to bin/ and refuse forbidden paths.
-	$artifactPaths = @($releaseBinaries)
+	$artifactPaths = @($releaseBinaries) + @('BUILD-ID')
 	$artifactPaths += Get-ChildItem -Path $distOut -Recurse -File |
 		ForEach-Object { $_.FullName.Substring($bin.Length + 1).Replace('\', '/') }
 

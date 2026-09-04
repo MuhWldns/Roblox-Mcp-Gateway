@@ -208,6 +208,7 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	api.Handle("GET /api/v1/devices", sessionBound(dashboard.devices))
 	api.Handle("POST /api/v1/devices/{device_id}/rename", sessionBound(dashboard.renameDevice))
 	api.Handle("POST /api/v1/devices/{device_id}/revoke", sessionBound(dashboard.revokeDevice))
+	api.Handle("POST /api/v1/devices/{device_id}/rotate-credential", sessionBound(dashboard.rotateDeviceCredential))
 	api.Handle("GET /api/v1/studios", sessionBound(dashboard.studios))
 	api.Handle("GET /api/v1/connectors", sessionBound(dashboard.connectors))
 	api.Handle("POST /api/v1/connectors/{grant_id}/target", sessionBound(dashboard.setConnectorTarget))

@@ -65,7 +65,10 @@ func (a *dashboardAPI) online(deviceID string) bool {
 	return a.registry != nil && a.registry.Online(deviceID)
 }
 
-// devices serves the owner's device list including live presence.
+// devices serves the owner's device list including live presence and Bridge
+// operational metadata (hostname, platform, bridge version, heartbeat, MCP
+// state, reconnect count, and last error). All operational fields are
+// nullable: they are absent for devices that have never connected.
 func (a *dashboardAPI) devices(w http.ResponseWriter, r *http.Request) {
 	userID, err := sessionUserID(r)
 	if err != nil {
@@ -78,23 +81,41 @@ func (a *dashboardAPI) devices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type deviceView struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Status    string `json:"status"`
-		Online    bool   `json:"online"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
+		ID             string  `json:"id"`
+		Name           string  `json:"name"`
+		Hostname       *string `json:"hostname"`
+		Platform       *string `json:"platform"`
+		BridgeVersion  *string `json:"bridge_version"`
+		Status         string  `json:"status"`
+		Online         bool    `json:"online"`
+		LastHeartbeat  *string `json:"last_heartbeat"`
+		MCPState       *string `json:"mcp_state"`
+		ReconnectCount int     `json:"reconnect_count"`
+		LastError      *string `json:"last_error"`
+		CreatedAt      string  `json:"created_at"`
+		UpdatedAt      string  `json:"updated_at"`
 	}
 	list := make([]deviceView, 0, len(rows))
 	for _, row := range rows {
-		list = append(list, deviceView{
-			ID:        row.ID,
-			Name:      row.Name,
-			Status:    row.Status,
-			Online:    a.online(row.ID),
-			CreatedAt: row.CreatedAt.UTC().Format(timeFormat),
-			UpdatedAt: row.UpdatedAt.UTC().Format(timeFormat),
-		})
+		v := deviceView{
+			ID:             row.ID,
+			Name:           row.Name,
+			Hostname:       row.Hostname,
+			Platform:       row.Platform,
+			BridgeVersion:  row.BridgeVersion,
+			Status:         row.Status,
+			Online:         a.online(row.ID),
+			MCPState:       row.MCPState,
+			ReconnectCount: row.ReconnectCount,
+			LastError:      row.LastError,
+			CreatedAt:      row.CreatedAt.UTC().Format(timeFormat),
+			UpdatedAt:      row.UpdatedAt.UTC().Format(timeFormat),
+		}
+		if row.LastHeartbeat != nil {
+			ts := row.LastHeartbeat.UTC().Format(timeFormat)
+			v.LastHeartbeat = &ts
+		}
+		list = append(list, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": list})
 }
@@ -187,9 +208,9 @@ func (a *dashboardAPI) connectors(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": list})
 }
-
-// license mirrors the /api/v1/me trial conventions and adds the paid-license
-// slot state.
+// license mirrors the /api/v1/me trial conventions, adds the paid-license
+// slot state, and includes owner identity, subscription, transfer, recovery,
+// and usage counters.
 func (a *dashboardAPI) license(w http.ResponseWriter, r *http.Request) {
 	userID, err := sessionUserID(r)
 	if err != nil {
@@ -227,14 +248,20 @@ func (a *dashboardAPI) license(w http.ResponseWriter, r *http.Request) {
 			"status":          row.Status,
 			"device_slots":    row.DeviceSlots,
 			"active_bindings": row.ActiveBindings,
+			"roblox_username": row.RobloxUsername,
+			"license_id":      row.LicenseID,
+			"subscription_id": row.SubscriptionID,
+			"subscription":    row.SubscriptionState,
+			"usage_last_30d":  row.UsageLast30Days,
+			"usage_last_7d":   row.UsageLast7Days,
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"trial": trial, "license": license})
 }
 
 // diagnostics serves the owner's service-side diagnostics summary: database
-// reachability, registered device count, live connections, and active Studio
-// sessions. The body stays secret-free.
+// reachability, registered device count, live connections, active Studio
+// sessions, and per-device operational state. The body stays secret-free.
 func (a *dashboardAPI) diagnostics(w http.ResponseWriter, r *http.Request) {
 	userID, err := sessionUserID(r)
 	if err != nil {
@@ -247,10 +274,33 @@ func (a *dashboardAPI) diagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	online := 0
+	devices := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		if a.online(row.ID) {
+		isOnline := a.online(row.ID)
+		if isOnline {
 			online++
 		}
+		dev := map[string]any{
+			"id":              row.ID,
+			"name":            row.Name,
+			"status":          row.Status,
+			"online":          isOnline,
+			"mcp_state":       row.MCPState,
+			"reconnect_count": row.ReconnectCount,
+		}
+		if row.Hostname != nil {
+			dev["hostname"] = *row.Hostname
+		}
+		if row.BridgeVersion != nil {
+			dev["bridge_version"] = *row.BridgeVersion
+		}
+		if row.LastHeartbeat != nil {
+			dev["last_heartbeat"] = row.LastHeartbeat.UTC().Format(timeFormat)
+		}
+		if row.LastError != nil {
+			dev["last_error"] = *row.LastError
+		}
+		devices = append(devices, dev)
 	}
 	activeStudios, err := a.store.StudioSessionsActive(r.Context(), userID)
 	if err != nil {
@@ -262,6 +312,7 @@ func (a *dashboardAPI) diagnostics(w http.ResponseWriter, r *http.Request) {
 		"devices_registered":     len(rows),
 		"devices_online":         online,
 		"studio_sessions_active": activeStudios,
+		"devices":                devices,
 	})
 }
 
@@ -307,6 +358,30 @@ func (a *dashboardAPI) revokeDevice(w http.ResponseWriter, r *http.Request) {
 		a.registry.Disconnect(deviceID)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rotateDeviceCredential replaces the active credential for an owned,
+// active device with a new opaque token, audits the change, and returns
+// the new plaintext credential. The caller must deliver it to the device
+// out-of-band.
+func (a *dashboardAPI) rotateDeviceCredential(w http.ResponseWriter, r *http.Request) {
+	userID, err := sessionUserID(r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	deviceID := r.PathValue("device_id")
+	plain, err := a.store.RotateDeviceCredential(
+		r.Context(),
+		requestIDFromContext(r.Context()),
+		userID,
+		deviceID,
+	)
+	if err != nil {
+		writeDashboardMutationError(w, err, "credential rotation unavailable", "device not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"credential": plain})
 }
 
 // setConnectorTarget repoints an owned connector grant.

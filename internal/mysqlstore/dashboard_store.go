@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"robloxkit/internal/audit"
+	"robloxkit/internal/credential"
 	"robloxkit/internal/dashboard"
 )
 
@@ -17,15 +18,15 @@ import (
 // devices, Studio sessions, or connector grants: such objects are
 // indistinguishable from missing ones. Each mutation applies its state change
 // and its audit event in one transaction, so an audit failure rolls the
-// mutation back.
 type DashboardStore struct {
 	DB     *sql.DB
 	Audits *audit.Service
+	Pepper []byte
 }
 
 // NewDashboardStore builds the dashboard store over a verified pool.
-func NewDashboardStore(db *sql.DB, audits *audit.Service) *DashboardStore {
-	return &DashboardStore{DB: db, Audits: audits}
+func NewDashboardStore(db *sql.DB, audits *audit.Service, pepper []byte) *DashboardStore {
+	return &DashboardStore{DB: db, Audits: audits, Pepper: pepper}
 }
 
 func (s *DashboardStore) check(ctx context.Context) error {
@@ -55,7 +56,6 @@ func (s *DashboardStore) audit(ctx context.Context, tx *sql.Tx, event audit.Even
 	return s.Audits.RecordInTx(ctx, tx, event)
 }
 
-// Devices lists the user's devices, oldest first.
 func (s *DashboardStore) Devices(ctx context.Context, userID string) ([]dashboard.DeviceRow, error) {
 	if err := s.check(ctx); err != nil {
 		return nil, err
@@ -64,7 +64,10 @@ func (s *DashboardStore) Devices(ctx context.Context, userID string) ([]dashboar
 		return nil, errors.New("mysqlstore: empty user id")
 	}
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, name, status, created_at, updated_at FROM devices WHERE user_id = ? ORDER BY created_at, id`,
+		`SELECT id, name, hostname, platform, bridge_version, status,
+		        last_heartbeat_at, official_mcp_state, reconnect_count, last_error,
+		        created_at, updated_at
+		 FROM devices WHERE user_id = ? ORDER BY created_at, id`,
 		userID)
 	if err != nil {
 		return nil, fmt.Errorf("mysqlstore: list devices: %w", err)
@@ -73,7 +76,11 @@ func (s *DashboardStore) Devices(ctx context.Context, userID string) ([]dashboar
 	devices := []dashboard.DeviceRow{}
 	for rows.Next() {
 		var row dashboard.DeviceRow
-		if err := rows.Scan(&row.ID, &row.Name, &row.Status, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&row.ID, &row.Name, &row.Hostname, &row.Platform, &row.BridgeVersion,
+			&row.Status, &row.LastHeartbeat, &row.MCPState, &row.ReconnectCount,
+			&row.LastError, &row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("mysqlstore: scan device: %w", err)
 		}
 		devices = append(devices, row)
@@ -167,8 +174,8 @@ func (s *DashboardStore) Connectors(ctx context.Context, userID string) ([]dashb
 	return connectors, nil
 }
 
-// License returns the user's newest active license with its live binding
-// count, or nil when no active license exists.
+// License returns the user's newest active license together with owner
+// identity, trial, subscription, transfer, recovery, and usage totals.
 func (s *DashboardStore) License(ctx context.Context, userID string) (*dashboard.LicenseRow, error) {
 	if err := s.check(ctx); err != nil {
 		return nil, err
@@ -178,8 +185,17 @@ func (s *DashboardStore) License(ctx context.Context, userID string) (*dashboard
 	}
 	var row dashboard.LicenseRow
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT status, device_slots FROM licenses WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
-		userID).Scan(&row.Status, &row.DeviceSlots)
+		`SELECT l.status, l.device_slots,
+		        ui.provider_subject AS roblox_username,
+		        l.id AS license_id,
+		        sub.id AS subscription_id, sub.status AS subscription_state
+		 FROM licenses l
+		 LEFT JOIN user_identities ui ON ui.user_id = l.user_id AND ui.provider = 'roblox' AND ui.status = 'active'
+		 LEFT JOIN subscriptions sub ON sub.id = l.subscription_id AND sub.user_id = l.user_id
+		 WHERE l.user_id = ? AND l.status = 'active'
+		 ORDER BY l.created_at DESC LIMIT 1`,
+		userID).Scan(&row.Status, &row.DeviceSlots, &row.RobloxUsername,
+		&row.LicenseID, &row.SubscriptionID, &row.SubscriptionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -187,10 +203,38 @@ func (s *DashboardStore) License(ctx context.Context, userID string) (*dashboard
 		return nil, fmt.Errorf("mysqlstore: read license: %w", err)
 	}
 	if err := s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM license_device_bindings WHERE user_id = ? AND status = 'active' AND revoked_at IS NULL`,
-		userID).Scan(&row.ActiveBindings); err != nil {
+		`SELECT COUNT(*) FROM license_device_bindings WHERE user_id = ? AND license_id = ? AND status = 'active' AND revoked_at IS NULL`,
+		userID, row.LicenseID).Scan(&row.ActiveBindings); err != nil {
 		return nil, fmt.Errorf("mysqlstore: count active bindings: %w", err)
 	}
+
+	// Trial window.
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT started_at, ends_at FROM trial_entitlements WHERE user_id = ? ORDER BY ends_at DESC LIMIT 1`,
+		userID).Scan(&row.TrialStartedAt, &row.TrialEndsAt)
+	if row.TrialEndsAt != nil {
+		active := time.Now().Before(*row.TrialEndsAt)
+		row.TrialActive = &active
+	}
+
+	// Pending transfer requests.
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM license_transfer_requests WHERE user_id = ? AND status = 'pending'`,
+		userID).Scan(&row.PendingTransfers)
+
+	// Open recovery cases.
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM account_recovery_cases WHERE user_id = ? AND status = 'open'`,
+		userID).Scan(&row.OpenRecoveryCases)
+
+	// Usage totals.
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_records WHERE user_id = ? AND occurred_at >= ?`,
+		userID, time.Now().AddDate(0, 0, -30)).Scan(&row.UsageLast30Days)
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_records WHERE user_id = ? AND occurred_at >= ?`,
+		userID, time.Now().AddDate(0, 0, -7)).Scan(&row.UsageLast7Days)
+
 	return &row, nil
 }
 
@@ -322,6 +366,83 @@ func (s *DashboardStore) RevokeDevice(ctx context.Context, correlation string, n
 		return fmt.Errorf("mysqlstore: commit device revocation: %w", err)
 	}
 	return nil
+}
+
+// RotateDeviceCredential replaces the active credential for an owned, active
+// device with a new opaque token, audits the change, and returns the new
+// plaintext credential. The caller must deliver the new credential to the
+// Bridge; the server never retains the plaintext.
+func (s *DashboardStore) RotateDeviceCredential(ctx context.Context, correlation, userID, deviceID string) (string, error) {
+	if err := s.check(ctx); err != nil {
+		return "", err
+	}
+	if userID == "" || deviceID == "" {
+		return "", errors.New("mysqlstore: rotation requires user and device")
+	}
+	if len(s.Pepper) == 0 {
+		return "", errors.New("mysqlstore: credential pepper is required")
+	}
+	correlation, err := auditCorrelation(correlation)
+	if err != nil {
+		return "", err
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	// Verify the device exists, is active, and is owned by the user.
+	var status string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM devices WHERE id = ? AND user_id = ? FOR UPDATE`,
+		deviceID, userID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return "", dashboard.ErrNotFound
+	} else if err != nil {
+		return "", fmt.Errorf("mysqlstore: find device for rotation: %w", err)
+	}
+	if status != "active" {
+		return "", dashboard.ErrNotFound
+	}
+
+	// Generate a new opaque credential.
+	plain, digest, err := credential.Generate("rks_", 24, s.Pepper)
+	if err != nil {
+		return "", fmt.Errorf("mysqlstore: generate credential: %w", err)
+	}
+
+	// Revoke the current active credential and insert the new one.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE device_credentials SET revoked_at = NOW(6) WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL`,
+		deviceID, userID); err != nil {
+		return "", fmt.Errorf("mysqlstore: revoke old credential: %w", err)
+	}
+	credID, err := identityUUID()
+	if err != nil {
+		return "", fmt.Errorf("mysqlstore: generate credential id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO device_credentials (id, user_id, device_id, credential_digest, created_at)
+		 VALUES (?, ?, ?, ?, NOW(6))`,
+		credID, userID, deviceID, digest[:]); err != nil {
+		return "", fmt.Errorf("mysqlstore: insert new credential: %w", err)
+	}
+
+	if err := s.audit(ctx, tx, audit.Event{
+		Actor:         audit.Actor{UserID: userID, Kind: audit.ActorUser},
+		Action:        "device.credential_rotate",
+		CorrelationID: correlation,
+		UserID:        userID,
+		TargetType:    "device",
+		TargetID:      deviceID,
+		After:         map[string]string{"credential_id": credID},
+	}); err != nil {
+		return "", fmt.Errorf("mysqlstore: audit credential rotation: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("mysqlstore: commit credential rotation: %w", err)
+	}
+	return plain, nil
 }
 
 // SetConnectorTarget repoints an owned, unrevoked connector grant at an

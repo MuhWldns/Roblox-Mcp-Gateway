@@ -1,7 +1,7 @@
 // Browser API client: every call uses relative URLs with credentials so
-// cookies ride along. No credential, session, device, or MCP token is ever
-// received by these endpoints, and nothing is written to localStorage or
-// sessionStorage — the CSRF token lives in module memory only.
+// cookies ride along. The one-time device credential returned by rotation is
+// handed directly to the caller; no secret is written to localStorage or
+// sessionStorage. The CSRF token lives in module memory only.
 
 export interface TrialState {
   active: boolean;
@@ -39,6 +39,13 @@ export interface DeviceView {
   name: string;
   status: string;
   online: boolean;
+  hostname: string | null;
+  platform: string | null;
+  bridge_version: string | null;
+  last_heartbeat_at: string | null;
+  official_mcp_state: string | null;
+  reconnect_count: number;
+  last_error: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -76,15 +83,40 @@ export interface ConnectorsResponse {
   connectors: ConnectorView[];
 }
 
+export interface LicenseOwner {
+  roblox_id_masked: string;
+  display_name: string;
+}
+
 export interface LicenseState {
   status: string;
+  expires_at: string | null;
+  subscription_id: string | null;
   device_slots: number;
   active_bindings: number;
+  available_slots: number;
+  allowed_scopes: string[];
+  usage_limit: number | null;
+  current_usage: number;
+  transfer_status: string | null;
+  recovery_status: string | null;
 }
 
 export interface LicenseResponse {
+  owner: LicenseOwner;
   trial: TrialState | null;
   license: LicenseState | null;
+}
+
+export interface DiagnosticDeviceView {
+  id: string;
+  name: string;
+  status: string;
+  online: boolean;
+  last_heartbeat_at: string | null;
+  official_mcp_state: string | null;
+  reconnect_count: number;
+  last_error: string | null;
 }
 
 export interface DiagnosticsResponse {
@@ -92,6 +124,12 @@ export interface DiagnosticsResponse {
   devices_registered: number;
   devices_online: number;
   studio_sessions_active: number;
+  devices: DiagnosticDeviceView[];
+}
+
+export interface RotatedDeviceCredential {
+  device_id: string;
+  device_credential: string;
 }
 
 // ServerClock anchors time arithmetic: serverNowMs is the server's wall clock
@@ -238,9 +276,9 @@ export function trialDaysRemaining(endsAt: string, clock: ServerClock): number {
 
 // mutation posts a session-bound change with the CSRF double-submit pair; a
 // body is sent only when the endpoint expects one.
-async function mutation(path: string, body?: string): Promise<void> {
+async function mutation<T = void>(path: string, body?: string): Promise<T> {
   const token = await ensureCsrf();
-  return request<void>(path, {
+  return request<T>(path, {
     method: "POST",
     headers: {
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -263,6 +301,14 @@ export async function renameDevice(deviceId: string, name: string): Promise<void
 
 export async function revokeDevice(deviceId: string): Promise<void> {
   return mutation(`/api/v1/devices/${encodeURIComponent(deviceId)}/revoke`);
+}
+
+export async function rotateDeviceCredential(
+  deviceId: string,
+): Promise<RotatedDeviceCredential> {
+  return mutation<RotatedDeviceCredential>(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/rotate-credential`,
+  );
 }
 
 export async function getStudios(): Promise<StudiosResponse> {

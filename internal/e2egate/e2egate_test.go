@@ -763,7 +763,7 @@ func (st *liveStack) compose() {
 		Download:         download,
 		DownloadMetadata: downloadMeta,
 		Enrollment:       st.enrollment,
-		Dashboard:        mysqlstore.NewDashboardStore(st.db, st.auditSvc),
+		Dashboard:        mysqlstore.NewDashboardStore(st.db, st.auditSvc, []byte("e2e-test-pepper")),
 		Registry:         httpserver.NewBridgeRegistry(st.registry),
 		Admin: &httpserver.AdminConfig{
 			Entitlements: st.entitlement,

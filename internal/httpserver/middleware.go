@@ -28,6 +28,7 @@ const DefaultMaxBodyBytes int64 = 1 << 20
 // SPA, the API, health probes, and the well-known discovery documents.
 const (
 	hstsHeaderValue           = "max-age=31536000; includeSubDomains"
+	cspHeaderValue            = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
 	contentTypeOptionsValue   = "nosniff"
 	frameOptionsValue         = "DENY"
 	referrerPolicyValue       = "no-referrer"
@@ -146,6 +147,7 @@ func secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers := w.Header()
 		headers.Set("Strict-Transport-Security", hstsHeaderValue)
+		headers.Set("Content-Security-Policy", cspHeaderValue)
 		headers.Set("X-Content-Type-Options", contentTypeOptionsValue)
 		headers.Set("X-Frame-Options", frameOptionsValue)
 		headers.Set("Referrer-Policy", referrerPolicyValue)

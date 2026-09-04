@@ -570,7 +570,7 @@ func newLimitStack(t *testing.T, budgets map[Class]Budget, mutate func(cfg *Conf
 	clock := func() time.Time { return time.Date(2026, 9, 4, 11, 0, 0, 0, time.UTC) }
 	entitlements := entitlement.NewService(mysqlstore.NewEntitlementStore(db, entClock{now: clock()}, auditSvc), entClock{now: clock()})
 	deviceStore := mysqlstore.NewDeviceStore(db)
-	dashboard := mysqlstore.NewDashboardStore(db, auditSvc)
+	dashboard := mysqlstore.NewDashboardStore(db, auditSvc, pepper)
 	enrollment, err := device.NewEnrollment(deviceStore, entitlements, pepper, clock)
 	if err != nil {
 		t.Fatalf("construct enrollment: %v", err)

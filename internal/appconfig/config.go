@@ -19,6 +19,7 @@ type Server struct {
 	TrustedProxies          []string
 	TokenPepper             string
 	HTTPReadTimeout         time.Duration
+	RobloxClientSecret      string
 	HTTPWriteTimeout        time.Duration
 	MySQLMaxOpenConns       int
 	MySQLMaxIdleConns       int
@@ -52,6 +53,7 @@ func LoadServer(getenv func(string) string) (Server, error) {
 	config.AllowedOrigin = parseURL(getenv, "ALLOWED_ORIGIN", "https", &validationErrors)
 	config.TrustedProxies = parseList(getenv, "TRUSTED_PROXIES", &validationErrors)
 	config.TokenPepper = required(getenv, "TOKEN_PEPPER", &validationErrors)
+	config.RobloxClientSecret = strings.TrimSpace(getenv("ROBLOX_CLIENT_SECRET"))
 	config.HTTPReadTimeout = parseDuration(getenv, "HTTP_READ_TIMEOUT", &validationErrors)
 	config.HTTPWriteTimeout = parseDuration(getenv, "HTTP_WRITE_TIMEOUT", &validationErrors)
 	config.MySQLMaxOpenConns = parsePositiveInt(getenv, "MYSQL_MAX_OPEN_CONNS", &validationErrors)

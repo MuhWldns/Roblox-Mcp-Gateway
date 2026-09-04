@@ -39,7 +39,13 @@ type consentApproval struct {
 // its audit event in one transaction, then issue the code.
 func (p *Provider) handleConsentDecision(w http.ResponseWriter, r *http.Request, ar fosite.AuthorizeRequester, userID string) {
 	ctx := r.Context()
-	switch action := r.PostFormValue("action"); action {
+	if !validateConsentCSRF(r) {
+		writeProviderError(w, http.StatusForbidden, fosite.ErrInvalidRequest.
+			WithHint("The consent form CSRF token is missing or invalid."))
+		return
+	}
+
+ 	switch action := r.PostFormValue("action"); action {
 	case "deny":
 		p.fosite.WriteAuthorizeError(ctx, w, ar, fosite.ErrAccessDenied)
 		return

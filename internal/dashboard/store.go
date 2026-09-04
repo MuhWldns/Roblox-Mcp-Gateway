@@ -16,14 +16,23 @@ import (
 // are deliberately indistinguishable so responses leak nothing.
 var ErrNotFound = errors.New("dashboard: object not found")
 
-// DeviceRow is one owned device as persisted. Live presence is not part of
-// the row: it comes from the Bridge registry at read time.
+// DeviceRow is one owned device as persisted. Live presence, hostname, platform,
+// bridge version, heartbeat timestamp, and MCP state come from the Bridge
+// hello/status/heartbeat data; they are nullable when the device has never
+// connected or the signal is genuinely unavailable.
 type DeviceRow struct {
-	ID        string
-	Name      string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             string
+	Name           string
+	Hostname       *string
+	Platform       *string
+	BridgeVersion  *string
+	Status         string
+	LastHeartbeat  *time.Time
+	MCPState       *string
+	ReconnectCount int
+	LastError      *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // StudioRow is one Studio session as persisted.
@@ -50,11 +59,24 @@ type ConnectorRow struct {
 	RevokedAt       *time.Time
 }
 
-// LicenseRow is the active paid-license state of one user.
+// LicenseRow is the active paid-license state of one user, together with the
+// owner's Roblox identity, current trial, subscription, pending transfer
+// requests, open recovery cases, and recent usage totals.
 type LicenseRow struct {
-	Status         string
-	DeviceSlots    int
-	ActiveBindings int
+	Status            string
+	DeviceSlots       int
+	ActiveBindings    int
+	LicenseID         *string
+	RobloxUsername    *string
+	TrialActive       *bool
+	TrialStartedAt    *time.Time
+	TrialEndsAt       *time.Time
+	SubscriptionID    *string
+	SubscriptionState *string
+	PendingTransfers  int
+	OpenRecoveryCases int
+	UsageLast30Days   int
+	UsageLast7Days    int
 }
 
 // Store reads the session user's dashboard state and applies the self-service
@@ -89,4 +111,8 @@ type Store interface {
 	// access and refresh token under it, and audits the transition.
 	// Revoking twice succeeds without a second audit event.
 	RevokeConnector(ctx context.Context, correlation string, now time.Time, userID, grantID string) error
+	// RotateDeviceCredential replaces the active credential for an owned,
+	// active device with a new opaque token, audits the change, and returns
+	// the new plaintext credential.
+	RotateDeviceCredential(ctx context.Context, correlation, userID, deviceID string) (string, error)
 }

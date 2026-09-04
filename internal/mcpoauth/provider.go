@@ -206,12 +206,13 @@ func NewProvider(cfg Config) (*Provider, error) {
 	}, nil
 }
 
-// Handler composes the three connector endpoints on a fresh mux.
+// Handler composes the connector OAuth endpoints on a fresh mux.
 func (p *Provider) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(AuthorizePath, http.HandlerFunc(p.AuthorizeHTTP))
 	mux.Handle(TokenPath, http.HandlerFunc(p.TokenHTTP))
 	mux.Handle(RevocationPath, http.HandlerFunc(p.RevocationHTTP))
+	mux.Handle(RegistrationPath, http.HandlerFunc(p.RegistrationHTTP))
 	return mux
 }
 

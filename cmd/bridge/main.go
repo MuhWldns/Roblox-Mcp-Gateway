@@ -104,7 +104,7 @@ func runLocal(ctx context.Context) {
 		Process:     process,
 		Output:      os.Stdout,
 		DeviceName:  hostname(),
-		StudioReady: studioReadinessUnavailable,
+		StudioReady: studioReadyAfterVerifiedMCPCall,
 	})
 
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -275,7 +275,7 @@ func newRemoteDeps(sink func(statusui.Event) error) (bridgeapp.RemoteDeps, error
 		DeviceName:      hostname(),
 		Output:          os.Stdout,
 		EventSink:       sink,
-		StudioReady:     studioReadinessUnavailable,
+		StudioReady:     studioReadyAfterVerifiedMCPCall,
 		ConnectTimeout:  config.ConnectTimeout,
 		ResponseTimeout: config.ResponseTimeout,
 		QueueLimit:      config.QueueLimit,
@@ -311,11 +311,11 @@ func openServiceLog() (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 }
 
-// studioReadinessUnavailable is deliberately fail-closed until the official
-// local Studio readiness API is available. A nil callback must never imply a
-// live Studio session and allow SYSTEM CONNECTED to be rendered.
-func studioReadinessUnavailable(context.Context) (int, error) {
-	return 0, errors.New("local Roblox Studio readiness probe is unavailable")
+// studioReadyAfterVerifiedMCPCall reports the single Studio session already
+// proven by bridgeapp's initialize, tools/list, and successful safe read-only
+// tools/call sequence. It is a post-handshake fact, not an OS discovery API.
+func studioReadyAfterVerifiedMCPCall(context.Context) (int, error) {
+	return 1, nil
 }
 
 func hostname() string {

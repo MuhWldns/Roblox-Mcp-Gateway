@@ -1,10 +1,14 @@
 package mcpoauth
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"html/template"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/ory/fosite"
 
@@ -50,6 +54,7 @@ type consentView struct {
 	CodeChallengeMethod string
 	Devices             []ConsentDevice
 	Studios             []ConsentStudio
+	CSRFToken           string
 }
 
 var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
@@ -70,7 +75,7 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
 <input type="hidden" name="state" value="{{.State}}">
 <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
 <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
-<input type="hidden" name="resource" value="{{.Resource}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <fieldset>
 <legend>Scopes</legend>
 {{range .Scopes}}<label><input type="checkbox" name="grant" value="{{.}}" checked> {{.}}</label><br>
@@ -197,6 +202,13 @@ func (p *Provider) renderConsent(w http.ResponseWriter, r *http.Request, ar fosi
 		writeProviderError(w, http.StatusInternalServerError, fosite.ErrServerError.WithHint("The consent page could not load Studio sessions."))
 		return
 	}
+	csrfToken, err := newCSRFToken()
+	if err != nil {
+		writeProviderError(w, http.StatusInternalServerError, fosite.ErrServerError.WithHint("The consent page could not be generated."))
+		return
+	}
+	csrfCookie := consentCSRFCookie(csrfToken)
+	http.SetCookie(w, csrfCookie)
 	view := consentView{
 		Action:              AuthorizePath,
 		ClientName:          client.ClientName,
@@ -210,6 +222,7 @@ func (p *Provider) renderConsent(w http.ResponseWriter, r *http.Request, ar fosi
 		CodeChallengeMethod: form.Get("code_challenge_method"),
 		Devices:             devices,
 		Studios:             studios,
+		CSRFToken:           csrfToken,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -238,4 +251,45 @@ func writeProviderError(w http.ResponseWriter, status int, err error) {
 		Description: rfc.DescriptionField,
 	}
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+const (
+	consentCSRFCookieName  = "__Host-robloxkit_consent_csrf"
+	consentCSRFTokenBytes  = 32
+	consentCSRFMaxAge      = 10 * time.Minute
+)
+
+// newCSRFToken generates a random URL-safe token for the consent form.
+func newCSRFToken() (string, error) {
+	raw := make([]byte, consentCSRFTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// consentCSRFCookie builds the hardened CSRF cookie for the consent form.
+func consentCSRFCookie(token string) *http.Cookie {
+	return &http.Cookie{
+		Name:     consentCSRFCookieName,
+		Value:    token,
+		Path:     AuthorizePath,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(consentCSRFMaxAge / time.Second),
+	}
+}
+
+// validateConsentCSRF compares the form token with the cookie token in constant time.
+func validateConsentCSRF(r *http.Request) bool {
+	cookie, err := r.Cookie(consentCSRFCookieName)
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+	formToken := r.PostFormValue("csrf_token")
+	if formToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(formToken)) == 1
 }

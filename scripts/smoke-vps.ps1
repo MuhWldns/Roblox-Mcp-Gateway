@@ -17,14 +17,20 @@
 # drops its scratch database and temporary files.
 
 param(
-	[string]$Dsn = $env:MYSQL_TEST_DSN
+	[string]$Dsn = $env:MYSQL_TEST_DSN,
+	[string]$ReleaseDirectory,
+	[switch]$VerifyReleaseOnly,
+	[switch]$RollbackProof
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSScriptRoot
-$releaseDir = Join-Path $root 'bin'
+if (-not $ReleaseDirectory) {
+	$ReleaseDirectory = Join-Path $root 'bin'
+}
+$releaseDir = [System.IO.Path]::GetFullPath($ReleaseDirectory)
 if (-not $Dsn) {
 	$Dsn = 'root@tcp(127.0.0.1:3306)/'
 }
@@ -67,6 +73,111 @@ function Assert-True {
 	}
 }
 
+function Assert-ReleaseManifest {
+	param([string]$Directory)
+
+	$releaseRoot = [System.IO.Path]::GetFullPath($Directory)
+	$sumsPath = Join-Path $releaseRoot 'SHA-256SUMS'
+	Assert-True (Test-Path -LiteralPath $sumsPath -PathType Leaf) "missing $sumsPath"
+	$lines = [System.IO.File]::ReadAllLines($sumsPath)
+	Assert-True ($lines.Count -gt 0) 'SHA-256SUMS must contain at least one entry'
+	$seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+	$verified = New-Object 'System.Collections.Generic.List[string]'
+	$rootPrefix = $releaseRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+
+	foreach ($line in $lines) {
+		$match = [System.Text.RegularExpressions.Regex]::Match($line, '^(?<hash>[0-9a-f]{64}) \*(?<path>[^\r\n]+)$', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+		Assert-True $match.Success "malformed checksum line: $line"
+		$relative = $match.Groups['path'].Value
+		Assert-True (-not $relative.Contains('\')) "checksum path must use forward slashes: $relative"
+		Assert-True (-not $relative.StartsWith('/')) "absolute checksum path is forbidden: $relative"
+		Assert-True ($relative -notmatch '^[A-Za-z]:') "absolute checksum path is forbidden: $relative"
+		$segments = $relative.Split('/')
+		Assert-True (-not ($segments | Where-Object { $_ -eq '' -or $_ -eq '.' -or $_ -eq '..' })) "unsafe checksum path: $relative"
+		Assert-True ($seen.Add($relative)) "duplicate checksum path: $relative"
+
+		$platformRelative = $relative.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+		$artifactPath = [System.IO.Path]::GetFullPath((Join-Path $releaseRoot $platformRelative))
+		Assert-True ($artifactPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) "checksum path escapes the release directory: $relative"
+		Assert-True (Test-Path -LiteralPath $artifactPath -PathType Leaf) "checksummed artifact is missing: $relative"
+		$actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifactPath).Hash.ToLowerInvariant()
+		$expected = $match.Groups['hash'].Value
+		Assert-True ($actual -ceq $expected) "checksum mismatch for ${relative}: expected $expected, got $actual"
+		$verified.Add($relative)
+	}
+
+	return $verified.ToArray()
+}
+
+function Assert-ManifestContains {
+	param([string[]]$VerifiedPaths, [string[]]$RequiredPaths)
+	$verified = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+	foreach ($path in $VerifiedPaths) { [void]$verified.Add($path) }
+	foreach ($required in $RequiredPaths) {
+		Assert-True ($verified.Contains($required)) "SHA-256SUMS does not cover required artifact: $required"
+	}
+}
+
+function Assert-ReleaseBuildIdentity {
+	param([string]$Directory, [string[]]$BinaryPaths)
+
+	$identityPath = Join-Path $Directory 'BUILD-ID'
+	Assert-True (Test-Path -LiteralPath $identityPath -PathType Leaf) "release is missing BUILD-ID: $Directory"
+	$rawIdentity = [System.IO.File]::ReadAllText($identityPath)
+	Assert-True ($rawIdentity -match '\A(?<commit>[0-9a-f]{40})/(?<version>[^\r\n]+)\n\z') "malformed BUILD-ID in $Directory"
+	$identity = $rawIdentity.Substring(0, $rawIdentity.Length - 1)
+	foreach ($relative in $BinaryPaths) {
+		$binary = Join-Path $Directory $relative
+		Assert-True (Test-Path -LiteralPath $binary -PathType Leaf) "release is missing identity-bearing binary: $relative"
+		$embedded = (& go tool buildid $binary).Trim()
+		Assert-True ($LASTEXITCODE -eq 0) "go tool buildid failed for $binary"
+		Assert-True ($embedded -ceq $identity) "$relative build ID is '$embedded', want release identity '$identity'"
+	}
+	return $identity
+}
+
+function Copy-DirectoryContents {
+	param([string]$Source, [string]$Destination)
+	New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+	Get-ChildItem -LiteralPath $Source | Copy-Item -Destination $Destination -Recurse -Force
+}
+
+function New-LocalReleaseManifest {
+	param([string]$Directory)
+	$rootPath = [System.IO.Path]::GetFullPath($Directory)
+	$relativePaths = Get-ChildItem -LiteralPath $rootPath -Recurse -File |
+		Where-Object { $_.Name -ne 'SHA-256SUMS' } |
+		ForEach-Object { $_.FullName.Substring($rootPath.Length + 1).Replace('\', '/') } |
+		Sort-Object
+	$lines = foreach ($relative in $relativePaths) {
+		$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $rootPath $relative)).Hash.ToLowerInvariant()
+		"$hash *$relative"
+	}
+	[System.IO.File]::WriteAllText(
+		(Join-Path $rootPath 'SHA-256SUMS'),
+		(($lines -join "`n") + "`n"),
+		(New-Object System.Text.UTF8Encoding($false))
+	)
+}
+
+function Set-AtomicReleaseSelector {
+	param([string]$DeploymentRoot, [string]$ReleaseName)
+	Assert-True ($ReleaseName -match '\A[A-Za-z0-9._-]+\z') "unsafe release selector: $ReleaseName"
+	$selector = Join-Path $DeploymentRoot 'ACTIVE-RELEASE'
+	# 2. Every release binary must match the manifest-covered build identity,
+	# and that identity must belong to the commit being smoked.
+	$releaseIdentity = Assert-ReleaseBuildIdentity -Directory $releaseDir -BinaryPaths @(
+		'robloxkit-server-linux-amd64',
+		'robloxkit-migrate-linux-amd64',
+		'RobloxBridge-windows-amd64.exe'
+	)
+	$commit = (& git rev-parse HEAD).Trim()
+	Assert-True ($LASTEXITCODE -eq 0) 'git rev-parse HEAD failed'
+	Assert-True ($releaseIdentity.StartsWith("$commit/", [System.StringComparison]::Ordinal)) "release identity '$releaseIdentity' does not belong to current commit $commit"
+	Write-Output "smoke: release binaries match BUILD-ID $releaseIdentity"
+	return Join-Path (Join-Path $DeploymentRoot 'releases') $name
+}
+
 function Wait-HttpStatus {
 	param([string]$Uri, [int]$TimeoutSeconds)
 	$deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -99,23 +210,19 @@ function Remove-ScratchDatabase {
 try {
 	Push-Location $root
 
-	# 1. Release artifacts exist and pass their checksum manifest.
-	Assert-True (Test-Path (Join-Path $releaseDir 'robloxkit-server-linux-amd64')) 'missing bin/robloxkit-server-linux-amd64; run scripts/build-release.ps1 first'
-	Assert-True (Test-Path (Join-Path $releaseDir 'robloxkit-migrate-linux-amd64')) 'missing bin/robloxkit-migrate-linux-amd64; run scripts/build-release.ps1 first'
-	Assert-True (Test-Path (Join-Path $releaseDir 'RobloxBridge-windows-amd64.exe')) 'missing bin/RobloxBridge-windows-amd64.exe; run scripts/build-release.ps1 first'
-	Assert-True (Test-Path (Join-Path $releaseDir 'dist\index.html')) 'missing bin/dist/index.html; run scripts/build-release.ps1 first'
-
-	$sumsPath = Join-Path $releaseDir 'SHA-256SUMS'
-	Assert-True (Test-Path $sumsPath) 'missing bin/SHA-256SUMS; run scripts/build-release.ps1 first'
-	foreach ($line in (Get-Content $sumsPath)) {
-		$parts = $line -split '  ', 2
-		Assert-True ($parts.Count -eq 2) "malformed checksum line: $line"
-		$artifactPath = Join-Path $releaseDir ($parts[1] -replace '/', '\')
-		Assert-True (Test-Path $artifactPath) "checksummed artifact is missing: $($parts[1])"
-		$actual = (Get-FileHash -Algorithm SHA256 -Path $artifactPath).Hash.ToLowerInvariant()
-		Assert-True ($actual -eq $parts[0]) "checksum mismatch for $($parts[1]): expected $($parts[0]), got $actual"
-	}
+	# 1. Release artifacts exist, every required file is covered by the
+	# manifest, and each GNU binary-format entry is safe before it is opened.
+	$verifiedPaths = @(Assert-ReleaseManifest -Directory $releaseDir)
 	Write-Output 'smoke: release artifacts match SHA-256SUMS'
+	if ($VerifyReleaseOnly) {
+		return
+	}
+	Assert-ManifestContains -VerifiedPaths $verifiedPaths -RequiredPaths @(
+		'robloxkit-server-linux-amd64',
+		'robloxkit-migrate-linux-amd64',
+		'RobloxBridge-windows-amd64.exe',
+		'dist/index.html'
+	)
 
 	# 2. Every release binary carries the current commit through its build
 	# ID (the release stamps "commit/version" explicitly; automatic -buildvcs

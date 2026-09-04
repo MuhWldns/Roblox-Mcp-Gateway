@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -425,18 +424,14 @@ func (l *Limiter) sweepLocked(now time.Time, budget Budget) {
 	}
 }
 
-// RemotePrincipal derives the bucket principal from the request's remote
-// host. Unauthenticated endpoints key their budget on it: one client cannot
-// exhaust the budget for another.
+// RemotePrincipal derives the bucket principal from the verified client
+// address installed by NewTrustedClientAddressMiddleware. When used outside
+// that middleware, it falls back to the canonical direct RemoteAddr host.
 func RemotePrincipal(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || host == "" {
-		host = r.RemoteAddr
+	if addr, ok := clientAddressFromContext(r.Context()); ok {
+		return addr.String()
 	}
-	if host == "" {
-		host = "unknown"
-	}
-	return host
+	return canonicalRemoteAddress(r.RemoteAddr)
 }
 
 // SessionPrincipal derives the bucket principal from the authenticated

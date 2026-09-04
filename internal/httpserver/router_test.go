@@ -172,7 +172,7 @@ func newRouterStackWithReadiness(t *testing.T, ready health.Checker) *routerStac
 	auditSvc := audit.NewService(mysqlstore.NewAuditStore(db))
 	entitlements := entitlement.NewService(mysqlstore.NewEntitlementStore(db, clock, auditSvc), clock)
 	deviceStore := mysqlstore.NewDeviceStore(db)
-	dashboard := mysqlstore.NewDashboardStore(db, auditSvc)
+	dashboard := mysqlstore.NewDashboardStore(db, auditSvc, []byte(routerPepper))
 	enrollment, err := device.NewEnrollment(deviceStore, entitlements, []byte(routerPepper), clock.Now)
 	if err != nil {
 		t.Fatalf("construct enrollment: %v", err)
