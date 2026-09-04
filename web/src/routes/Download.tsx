@@ -2,24 +2,26 @@ import { useEffect, useState } from "react";
 import { Navigate } from "react-router";
 import {
   type DownloadMetadata,
-  type MeResponse,
+  type MeSnapshot,
   UnauthorizedError,
   getDownloadMetadata,
-  getMe,
+  getMeSnapshot,
   logout,
+  trialDaysRemaining,
 } from "../api/client";
 
 export default function Download() {
-  const [me, setMe] = useState<MeResponse | null>(null);
+  const [snapshot, setSnapshot] = useState<MeSnapshot | null>(null);
   const [metadata, setMetadata] = useState<DownloadMetadata | null>(null);
   const [denied, setDenied] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [, setRefresh] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    getMe()
-      .then(async (profile) => {
-        setMe(profile);
+    getMeSnapshot()
+      .then(async (current) => {
+        setSnapshot(current);
         const meta = await getDownloadMetadata();
         if (!cancelled) setMetadata(meta);
       })
@@ -35,17 +37,39 @@ export default function Download() {
     };
   }, []);
 
+  const me = snapshot?.me ?? null;
+  const clock = snapshot?.clock ?? null;
+  const trial = me?.trial ?? null;
+
+  // The countdown derives from the server clock snapshot on every render —
+  // the client clock contributes only the elapsed delta since the response,
+  // never the absolute "now". A missing server header degrades the anchor to
+  // the client clock rather than hiding the trial state. The timer below only
+  // forces periodic recomputation as time passes.
+  const remaining =
+    trial !== null && trial.active && clock !== null
+      ? trialDaysRemaining(trial.ends_at, clock)
+      : 0;
+
+  useEffect(() => {
+    if (trial === null || !trial.active || clock === null) {
+      return;
+    }
+    const id = window.setInterval(() => setRefresh(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, [trial, clock]);
+
   if (denied) {
     return <Navigate to="/login" replace />;
   }
-  if (failed && !me) {
+  if (failed && me === null) {
     return (
       <main>
         <p role="alert">{failed}</p>
       </main>
     );
   }
-  if (!me) {
+  if (me === null) {
     return (
       <main>
         <p role="status">Loading…</p>
@@ -79,9 +103,12 @@ export default function Download() {
         Downloading the Bridge does not start your free trial. Your 14-day trial
         begins only when your first device finishes enrollment.
       </p>
-      {me.trial?.active ? (
+      {trial?.active ? (
         <p data-testid="trial-state">
-          Free trial active — ends {me.trial.ends_at.slice(0, 10)}
+          Free trial active — ends {trial.ends_at.slice(0, 10)}{" "}
+          <span data-testid="trial-countdown">
+            ({remaining === 1 ? "1 day" : `${remaining} days`} remaining)
+          </span>
         </p>
       ) : null}
       <button

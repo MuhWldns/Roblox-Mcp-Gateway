@@ -1,10 +1,15 @@
 import { Navigate, createBrowserRouter, redirect, type RouteObject } from "react-router";
 import { UnauthorizedError, type MeResponse, getMe } from "./api/client";
 import AppShell from "./layout/AppShell";
+import Connectors from "./routes/Connectors";
+import Devices from "./routes/Devices";
+import Diagnostics from "./routes/Diagnostics";
 import Download from "./routes/Download";
 import Enroll from "./routes/Enroll";
 import ErrorPage from "./routes/ErrorPage";
+import License from "./routes/License";
 import Login from "./routes/Login";
+import Studios from "./routes/Studios";
 
 // The session loader guards every dashboard section: an expired or missing
 // browser session sends the visitor to sign in, while any other API failure
@@ -26,8 +31,8 @@ type ShellSectionProps = {
   description: string;
 };
 
-// Placeholder sections render a meaningful empty state until their full
-// screens land; each keeps a stable test id for navigation assertions.
+// The admin tools stay a placeholder until their full screen lands; the
+// placeholder keeps a stable test id for navigation assertions.
 function ShellSection({ slug, title, description }: ShellSectionProps) {
   return (
     <section data-testid={`page-${slug}`}>
@@ -38,56 +43,11 @@ function ShellSection({ slug, title, description }: ShellSectionProps) {
 }
 
 const dashboardSections: RouteObject[] = [
-  {
-    path: "devices",
-    element: (
-      <ShellSection
-        slug="devices"
-        title="Devices"
-        description="Bridges that finished enrollment will appear here."
-      />
-    ),
-  },
-  {
-    path: "studios",
-    element: (
-      <ShellSection
-        slug="studios"
-        title="Studios"
-        description="Roblox Studio clients connected through your Bridge will appear here."
-      />
-    ),
-  },
-  {
-    path: "connectors",
-    element: (
-      <ShellSection
-        slug="connectors"
-        title="Connectors"
-        description="AI connectors such as ChatGPT and Claude will appear here."
-      />
-    ),
-  },
-  {
-    path: "license",
-    element: (
-      <ShellSection
-        slug="license"
-        title="License"
-        description="Your license and free-trial details will appear here."
-      />
-    ),
-  },
-  {
-    path: "diagnostics",
-    element: (
-      <ShellSection
-        slug="diagnostics"
-        title="Diagnostics"
-        description="Bridge connection health and diagnostics will appear here."
-      />
-    ),
-  },
+  { path: "devices", element: <Devices /> },
+  { path: "studios", element: <Studios /> },
+  { path: "connectors", element: <Connectors /> },
+  { path: "license", element: <License /> },
+  { path: "diagnostics", element: <Diagnostics /> },
   {
     path: "admin",
     element: (
