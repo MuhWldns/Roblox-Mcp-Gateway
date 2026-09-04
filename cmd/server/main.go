@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"robloxkit/internal/appconfig"
 	"robloxkit/internal/audit"
+	"robloxkit/internal/bridgehub"
 	"robloxkit/internal/device"
 	"robloxkit/internal/entitlement"
 	"robloxkit/internal/health"
@@ -25,7 +27,13 @@ import (
 	"robloxkit/internal/session"
 )
 
-const defaultSessionLifetime = 12 * time.Hour
+const (
+	defaultSessionLifetime = 12 * time.Hour
+
+	// shutdownBudget bounds the whole graceful teardown; it must stay
+	// below any supervisor's kill timeout so the process exits on its own.
+	shutdownBudget = 30 * time.Second
+)
 
 // systemClock pins policy evaluation to wall time.
 type systemClock struct{}
@@ -40,10 +48,32 @@ func env(key, fallback string) string {
 	return value
 }
 
+// newLogger builds the structured JSON lifecycle logger. Every operational
+// line the process emits is one JSON record on stderr; no event ever
+// carries a DSN, credential, or token material.
+func newLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+// slogWriter adapts the standard library logger — the health probes' failure
+// notes — onto the structured JSON logger.
+type slogWriter struct {
+	logger *slog.Logger
+}
+
+func (w slogWriter) Write(p []byte) (int, error) {
+	if msg := strings.TrimSpace(string(p)); msg != "" {
+		w.logger.Warn(msg)
+	}
+	return len(p), nil
+}
+
 func main() {
+	logger := newLogger()
+
 	config, err := appconfig.LoadServer(os.Getenv)
 	if err != nil {
-		log.Printf("startup failed: %v", err)
+		logger.Error("startup failed", "error", err.Error())
 		os.Exit(1)
 	}
 
@@ -55,10 +85,9 @@ func main() {
 		MaxIdleConns: config.MySQLMaxIdleConns,
 	})
 	if err != nil {
-		log.Printf("database open failed: %v", err)
+		logger.Error("database open failed", "error", err.Error())
 		os.Exit(1)
 	}
-	defer db.Close()
 
 	pepper := []byte(config.TokenPepper)
 	clock := systemClock{}
@@ -71,7 +100,7 @@ func main() {
 
 	enrollment, err := device.NewEnrollment(deviceStore, entitlements, pepper, time.Now)
 	if err != nil {
-		log.Printf("enrollment setup failed: %v", err)
+		logger.Error("enrollment setup failed", "error", err.Error())
 		os.Exit(1)
 	}
 	enrollment.VerificationBaseURL = config.PublicAppURL.String()
@@ -86,7 +115,7 @@ func main() {
 		JWKSURI:         env("ROBLOX_JWKS_URI", ""),
 	})
 	if err != nil {
-		log.Printf("roblox login setup failed: %v", err)
+		logger.Error("roblox login setup failed", "error", err.Error())
 		os.Exit(1)
 	}
 	robloxHandler := &robloxauth.Handler{
@@ -101,12 +130,12 @@ func main() {
 	}
 	download, err := device.NewDownloadHandler(sessions, artifact)
 	if err != nil {
-		log.Printf("bridge artifact unavailable: %v", err)
+		logger.Error("bridge artifact unavailable", "error", err.Error())
 		os.Exit(1)
 	}
 	downloadMetadata, err := device.NewDownloadMetadataHandler(sessions, artifact)
 	if err != nil {
-		log.Printf("bridge artifact unavailable: %v", err)
+		logger.Error("bridge artifact unavailable", "error", err.Error())
 		os.Exit(1)
 	}
 	// The OAuth discovery documents share the gateway origin: the issuer is
@@ -116,13 +145,40 @@ func main() {
 	issuer := &url.URL{Scheme: resource.Scheme, Host: resource.Host}
 	metadata, err := mcpoauth.NewMetadata(issuer, resource, mcpoauth.SupportedScopes)
 	if err != nil {
-		log.Printf("oauth metadata setup failed: %v", err)
+		logger.Error("oauth metadata setup failed", "error", err.Error())
 		os.Exit(1)
 	}
 
 	dashboard := mysqlstore.NewDashboardStore(db, auditService)
 	oauthStore := mysqlstore.NewOAuthStore(db)
-	probes := health.NewHandler(db, nil)
+	// The readiness gate wraps the pool ping: while it is open, probes
+	// reflect the database; once shutdown marks it unready, every probe
+	// answers unavailable immediately without touching the pool.
+	gate := health.NewGate(db, logger)
+	probes := health.NewHandler(gate, log.New(slogWriter{logger: logger}, "", 0))
+
+	// The Bridge hub serves the device-authenticated /bridge WebSocket
+	// mount. Relayed MCP tool delivery lands with the connector gateway
+	// wiring; the hub alone already carries hello, heartbeat, and
+	// revocation traffic.
+	hub, err := bridgehub.NewHub(bridgehub.Config{
+		Store:             bridgehub.NewSQLStore(db),
+		Entitlements:      entitlements,
+		Pepper:            pepper,
+		HeartbeatInterval: config.BridgeHeartbeatInterval,
+		HeartbeatTimeout:  config.BridgeTimeout,
+		QueueDepth:        config.BridgeQueueLimit,
+		MaxEnvelopeBytes:  config.BridgeMaxMessageBytes,
+	})
+	if err != nil {
+		logger.Error("bridge hub setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+
+	// The work gate fronts the MCP and WSS mounts: shutdown refuses new
+	// work through it and drains admitted MCP requests before the hub
+	// closes.
+	work := httpserver.NewWorkGate()
 
 	// Endpoint rate limits: one conservative default per class, keyed by
 	// remote host for unauthenticated endpoints and by session user for
@@ -139,7 +195,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Printf("rate limiter setup failed: %v", err)
+		logger.Error("rate limiter setup failed", "error", err.Error())
 		os.Exit(1)
 	}
 
@@ -164,38 +220,53 @@ func main() {
 		},
 		Health:        probes,
 		Metadata:      &metadata,
+		Bridge:        work.WSS(hub),
 		AllowedOrigin: config.AllowedOrigin,
 		StaticDir:     env("WEB_STATIC_DIR", ""),
 	})
 	if err != nil {
-		log.Printf("router setup failed: %v", err)
+		logger.Error("router setup failed", "error", err.Error())
 		os.Exit(1)
 	}
 
-	server := &http.Server{
+	// The lifecycle controller owns the committed teardown order: mark
+	// readiness unready, refuse new MCP/WSS work, drain and fail pending
+	// relay calls, close the Bridge hub, close the HTTP kernel, and close
+	// the MySQL pool last.
+	server, err := httpserver.NewServer(httpserver.ServerConfig{
 		Addr:         config.ListenAddress,
 		Handler:      router,
 		ReadTimeout:  config.HTTPReadTimeout,
 		WriteTimeout: config.HTTPWriteTimeout,
+		Gate:         gate,
+		Work:         work,
+		Hub:          hub,
+		Pool:         db,
+		Logger:       logger,
+	})
+	if err != nil {
+		logger.Error("server setup failed", "error", err.Error())
+		os.Exit(1)
 	}
 
 	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		logger.Info("shutdown signal received")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("shutdown failed: %v", err)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("shutdown failed", "error", err.Error())
 		}
 		close(shutdownDone)
 	}()
 
-	log.Printf("robloxkit server listening on %s", config.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("server stopped: %v", err)
+		logger.Error("server stopped", "error", err.Error())
 		os.Exit(1)
 	}
 	<-shutdownDone
+	logger.Info("server exited cleanly")
 }
 
 func sessionLifetime() time.Duration {
