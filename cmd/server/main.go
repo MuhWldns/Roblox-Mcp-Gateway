@@ -121,8 +121,12 @@ func main() {
 	}
 
 	dashboard := mysqlstore.NewDashboardStore(db, auditService)
+	oauthStore := mysqlstore.NewOAuthStore(db)
 	probes := health.NewHandler(db, nil)
 
+	// The administration surface is enabled unconditionally; the configured
+	// ADMIN_USER_IDS decide who may execute. An empty list leaves every
+	// endpoint answering 403.
 	router, err := httpserver.NewRouter(httpserver.Config{
 		Sessions:         sessions,
 		RobloxAuth:       robloxHandler,
@@ -132,10 +136,15 @@ func main() {
 		DownloadMetadata: downloadMetadata,
 		Enrollment:       enrollment,
 		Dashboard:        dashboard,
-		Health:           probes,
-		Metadata:         &metadata,
-		AllowedOrigin:    config.AllowedOrigin,
-		StaticDir:        env("WEB_STATIC_DIR", ""),
+		Admin: &httpserver.AdminConfig{
+			Entitlements: entitlements,
+			OAuth:        oauthStore,
+			AdminUsers:   strings.Split(strings.TrimSpace(env("ADMIN_USER_IDS", "")), ","),
+		},
+		Health:        probes,
+		Metadata:      &metadata,
+		AllowedOrigin: config.AllowedOrigin,
+		StaticDir:     env("WEB_STATIC_DIR", ""),
 	})
 	if err != nil {
 		log.Printf("router setup failed: %v", err)

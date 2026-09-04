@@ -128,7 +128,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new UnauthorizedError();
   }
   if (!response.ok) {
-    throw new Error(`request failed with HTTP ${response.status}`);
+    // The status rides on the error so admin screens can explain 403/404/409
+    // distinctly; the message stays safe to render anywhere.
+    throw new ApiError(response.status);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -293,4 +295,140 @@ export async function getLicenseSnapshot(): Promise<LicenseSnapshot> {
 
 export async function getDiagnostics(): Promise<DiagnosticsResponse> {
   return request<DiagnosticsResponse>("/api/v1/diagnostics");
+}
+
+// --- Administration surface -------------------------------------------------
+
+// ApiError carries the HTTP status of a failed call. The message matches the
+// historical generic format so nothing that renders error.message changes.
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`request failed with HTTP ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export interface AdminIdentityView {
+  subject: string;
+  display_name: string;
+}
+
+export interface AdminDeviceView {
+  id: string;
+  name: string;
+  status: string;
+  online: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminLicenseView {
+  status: string;
+  device_slots: number;
+  active_bindings: number;
+}
+
+export interface AdminConnectorView {
+  id: string;
+  client_id: string;
+  client_name: string;
+  device_id: string;
+  studio_session_id?: string;
+  scopes: string[];
+  created_at: string;
+  revoked_at?: string;
+}
+
+export interface AdminTrialView {
+  id: string;
+  started_at: string;
+  ends_at: string;
+  active: boolean;
+}
+
+export interface AdminTransferPreview {
+  user_id: string;
+  identity: AdminIdentityView | null;
+  devices: AdminDeviceView[];
+  license: AdminLicenseView | null;
+  version: string;
+}
+
+export interface AdminRecoveryPreview {
+  user_id: string;
+  identity: AdminIdentityView | null;
+  devices: AdminDeviceView[];
+  connectors: AdminConnectorView[];
+  license: AdminLicenseView | null;
+  version: string;
+}
+
+export interface AdminTrialPreview {
+  user_id: string;
+  identity: AdminIdentityView | null;
+  trial: AdminTrialView | null;
+  version: string;
+}
+
+export interface AdminTransferRequest {
+  user_id: string;
+  license_id: string;
+  old_device_id: string;
+  new_device_id: string;
+  expected_version: string;
+  case_id: string;
+  reason: string;
+  evidence_ref: string;
+}
+
+export interface AdminRecoveryRequest {
+  user_id: string;
+  expected_version: string;
+  case_id: string;
+  reason: string;
+  evidence_ref: string;
+  new_identity_id?: string;
+}
+
+export interface AdminExtensionRequest {
+  user_id: string;
+  entitlement_id: string;
+  new_ends_at: string;
+  expected_version: string;
+  case_id: string;
+  reason: string;
+  evidence_ref: string;
+}
+
+export async function getAdminTransferPreview(userId: string): Promise<AdminTransferPreview> {
+  return request<AdminTransferPreview>(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/transfer-preview`,
+  );
+}
+
+export async function getAdminRecoveryPreview(userId: string): Promise<AdminRecoveryPreview> {
+  return request<AdminRecoveryPreview>(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/recovery-preview`,
+  );
+}
+
+export async function getAdminTrialPreview(userId: string): Promise<AdminTrialPreview> {
+  return request<AdminTrialPreview>(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/trial-preview`,
+  );
+}
+
+export async function adminTransferDevice(payload: AdminTransferRequest): Promise<void> {
+  return mutation("/api/v1/admin/transfers", JSON.stringify(payload));
+}
+
+export async function adminRecoverIdentity(payload: AdminRecoveryRequest): Promise<void> {
+  return mutation("/api/v1/admin/recoveries", JSON.stringify(payload));
+}
+
+export async function adminExtendTrial(payload: AdminExtensionRequest): Promise<void> {
+  return mutation("/api/v1/admin/trial-extensions", JSON.stringify(payload));
 }

@@ -1,6 +1,8 @@
 import { Navigate, createBrowserRouter, redirect, type RouteObject } from "react-router";
 import { UnauthorizedError, type MeResponse, getMe } from "./api/client";
 import AppShell from "./layout/AppShell";
+import AccountRecovery from "./routes/AccountRecovery";
+import Admin from "./routes/Admin";
 import Connectors from "./routes/Connectors";
 import Devices from "./routes/Devices";
 import Diagnostics from "./routes/Diagnostics";
@@ -10,6 +12,8 @@ import ErrorPage from "./routes/ErrorPage";
 import License from "./routes/License";
 import Login from "./routes/Login";
 import Studios from "./routes/Studios";
+import TrialExtension from "./routes/TrialExtension";
+import DeviceTransfer from "./routes/DeviceTransfer";
 
 // The session loader guards every dashboard section: an expired or missing
 // browser session sends the visitor to sign in, while any other API failure
@@ -25,23 +29,6 @@ export async function sessionLoader(): Promise<MeResponse> {
   }
 }
 
-type ShellSectionProps = {
-  slug: string;
-  title: string;
-  description: string;
-};
-
-// The admin tools stay a placeholder until their full screen lands; the
-// placeholder keeps a stable test id for navigation assertions.
-function ShellSection({ slug, title, description }: ShellSectionProps) {
-  return (
-    <section data-testid={`page-${slug}`}>
-      <h2>{title}</h2>
-      <p>{description}</p>
-    </section>
-  );
-}
-
 const dashboardSections: RouteObject[] = [
   { path: "devices", element: <Devices /> },
   { path: "studios", element: <Studios /> },
@@ -50,13 +37,12 @@ const dashboardSections: RouteObject[] = [
   { path: "diagnostics", element: <Diagnostics /> },
   {
     path: "admin",
-    element: (
-      <ShellSection
-        slug="admin"
-        title="Admin"
-        description="Administration tools will appear here."
-      />
-    ),
+    children: [
+      { index: true, element: <Admin /> },
+      { path: "transfer", element: <DeviceTransfer /> },
+      { path: "recovery", element: <AccountRecovery /> },
+      { path: "extension", element: <TrialExtension /> },
+    ],
   },
 ];
 

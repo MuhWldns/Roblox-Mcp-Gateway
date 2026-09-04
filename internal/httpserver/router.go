@@ -86,6 +86,12 @@ type Config struct {
 	// bodies and are never wrapped by this limit.
 	MaxBodyBytes int64
 
+	// Admin optionally mounts the privileged administration surface: the
+	// audited device transfer, identity recovery, and trial extension.
+	// The endpoints live inside the session and CSRF subtree; every
+	// request is additionally gated on the configured admin user ids.
+	Admin *AdminConfig
+
 	AllowedOrigin *url.URL
 	StaticDir     string
 }
@@ -127,11 +133,24 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	if cfg.Metadata == nil {
 		invalid = append(invalid, "oauth metadata is required")
 	}
-	if cfg.AllowedOrigin == nil {
-		invalid = append(invalid, "allowed origin is required")
-	}
 	if len(invalid) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidConfig, strings.Join(invalid, "; "))
+	}
+	// The administration surface composes the frozen entitlement service and
+	// the connector OAuth store; a half-configured AdminConfig is invalid
+	// rather than silently unaudited.
+	var admin *adminAPI
+	if cfg.Admin != nil {
+		if cfg.Admin.Entitlements == nil {
+			invalid = append(invalid, "admin entitlement service is required")
+		}
+		if cfg.Admin.OAuth == nil {
+			invalid = append(invalid, "admin oauth store is required")
+		}
+		if len(invalid) > 0 {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidConfig, strings.Join(invalid, "; "))
+		}
+		admin = newAdminAPI(cfg)
 	}
 
 	csrf := NewCSRF()
@@ -181,6 +200,20 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	api.Handle("GET /api/v1/license", sessionBound(dashboard.license))
 	api.Handle("GET /api/v1/diagnostics", sessionBound(dashboard.diagnostics))
 	api.Handle("POST /api/v1/sessions/revoke-all", sessionBound(dashboard.revokeAllSessions))
+	// Administration endpoints: session-bound, CSRF-protected, and gated on
+	// the configured administrator set. Reads preview the committed state
+	// and mint version tokens; mutations verify them before executing.
+	if admin != nil {
+		adminBound := func(handler http.HandlerFunc) http.Handler {
+			return requireSession(cfg.Sessions, admin.authorized(handler))
+		}
+		api.Handle("GET /api/v1/admin/users/{user_id}/transfer-preview", adminBound(admin.transferPreview))
+		api.Handle("GET /api/v1/admin/users/{user_id}/recovery-preview", adminBound(admin.recoveryPreview))
+		api.Handle("GET /api/v1/admin/users/{user_id}/trial-preview", adminBound(admin.trialPreview))
+		api.Handle("POST /api/v1/admin/transfers", adminBound(admin.transfer))
+		api.Handle("POST /api/v1/admin/recoveries", adminBound(admin.recover))
+		api.Handle("POST /api/v1/admin/trial-extensions", adminBound(admin.extend))
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", limitBody(bodyLimit(cfg))(csrf.Require(api)))
