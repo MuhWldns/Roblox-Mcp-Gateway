@@ -193,18 +193,26 @@ func (s *EntitlementStore) Authorize(ctx context.Context, now time.Time, subject
 	default:
 		return entitlement.Decision{}, fmt.Errorf("mysqlstore: read trial entitlement for %s: %w", subject.UserID, err)
 	}
-	active := hasTrial && now.Before(ent.EndsAt)
-	if !active {
-		var activeLicenses int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM licenses WHERE user_id = ? AND status = 'active'`,
-			subject.UserID,
-		).Scan(&activeLicenses); err != nil {
-			return entitlement.Decision{}, fmt.Errorf("mysqlstore: count active licenses for %s: %w", subject.UserID, err)
-		}
-		active = activeLicenses > 0
+	trialActive := hasTrial && now.Before(ent.EndsAt)
+
+	// The license source is evaluated regardless of the trial so the decision
+	// exposes which window is active: binding-gated surfaces only accept
+	// license-only access with a paid slot binding.
+	var activeLicenses int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM licenses WHERE user_id = ? AND status = 'active'`,
+		subject.UserID,
+	).Scan(&activeLicenses); err != nil {
+		return entitlement.Decision{}, fmt.Errorf("mysqlstore: count active licenses for %s: %w", subject.UserID, err)
 	}
-	return entitlement.Decision{Active: active, Entitlement: ent}, nil
+	licenseActive := activeLicenses > 0
+
+	return entitlement.Decision{
+		Active:        trialActive || licenseActive,
+		TrialActive:   trialActive,
+		LicenseActive: licenseActive,
+		Entitlement:   ent,
+	}, nil
 }
 
 // TransferDevice moves an active license slot from one device to another and

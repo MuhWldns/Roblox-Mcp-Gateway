@@ -330,3 +330,46 @@ func assertStrings(t *testing.T, name string, got, want []string) {
 		}
 	}
 }
+
+// LoadEnroll is the minimal additive loader for the interactive enrollment
+// flow: exactly BRIDGE_GATEWAY_URL and BRIDGE_CREDENTIAL_PATH — no launcher,
+// no runtime bounds — so the documented enroll invocation works with only
+// those two environment values.
+func TestLoadEnrollRequiresOnlyGatewayAndCredential(t *testing.T) {
+	env := map[string]string{
+		"BRIDGE_GATEWAY_URL":     "wss://api.example.test/bridge",
+		"BRIDGE_CREDENTIAL_PATH": `C:\ProgramData\RobloxBridge\device.credential`,
+	}
+	config, err := LoadEnroll(envGetter(env))
+	if err != nil {
+		t.Fatalf("LoadEnroll() error = %v, want success with only the two documented variables", err)
+	}
+	if config.GatewayURL == nil || config.GatewayURL.Scheme != "wss" {
+		t.Fatalf("LoadEnroll() GatewayURL = %v, want the parsed wss URL", config.GatewayURL)
+	}
+	if config.CredentialPath != env["BRIDGE_CREDENTIAL_PATH"] {
+		t.Fatalf("LoadEnroll() CredentialPath = %q", config.CredentialPath)
+	}
+
+	// Either missing value is a named validation error.
+	for _, key := range []string{"BRIDGE_GATEWAY_URL", "BRIDGE_CREDENTIAL_PATH"} {
+		broken := map[string]string{
+			"BRIDGE_GATEWAY_URL":     env["BRIDGE_GATEWAY_URL"],
+			"BRIDGE_CREDENTIAL_PATH": env["BRIDGE_CREDENTIAL_PATH"],
+		}
+		delete(broken, key)
+		_, err := LoadEnroll(envGetter(broken))
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("LoadEnroll() without %s: error = %v, want a named %s requirement", key, err, key)
+		}
+	}
+
+	// A wrong-scheme gateway URL is refused exactly as in the full loader.
+	bad := map[string]string{
+		"BRIDGE_GATEWAY_URL":     "http://api.example.test/bridge",
+		"BRIDGE_CREDENTIAL_PATH": env["BRIDGE_CREDENTIAL_PATH"],
+	}
+	if _, err := LoadEnroll(envGetter(bad)); err == nil || !strings.Contains(err.Error(), "BRIDGE_GATEWAY_URL") {
+		t.Fatalf("LoadEnroll() with http gateway: error = %v, want a BRIDGE_GATEWAY_URL scheme refusal", err)
+	}
+}

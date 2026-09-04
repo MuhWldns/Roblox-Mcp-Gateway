@@ -125,7 +125,9 @@ func mcpSafeIdentifier(s string) bool {
 type activeEntitlements struct{}
 
 func (activeEntitlements) Authorize(context.Context, entitlement.Subject) (entitlement.Decision, error) {
-	return entitlement.Decision{Active: true}, nil
+	// The stub models an active trial window: consent gates on the overall
+	// entitlement state and never inspects the binding-source fields.
+	return entitlement.Decision{Active: true, TrialActive: true}, nil
 }
 
 type mcpFixtureSpec struct {

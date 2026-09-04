@@ -171,3 +171,28 @@ func parseList(getenv func(string) string, key string, validationErrors *[]error
 	}
 	return items
 }
+
+// Enroll contains the minimal settings the interactive device enrollment
+// flow needs. Enrollment is a clean-install operation: it deliberately does
+// not require the MCP launcher or the runtime bounds — exactly the gateway
+// URL (to derive the https API origin) and the credential path.
+type Enroll struct {
+	GatewayURL     *url.URL
+	CredentialPath string
+}
+
+// LoadEnroll reads and validates the minimal enrollment configuration using
+// getenv: exactly BRIDGE_GATEWAY_URL (wss, shared origin with the API) and
+// BRIDGE_CREDENTIAL_PATH. Every other BRIDGE_* variable is ignored.
+func LoadEnroll(getenv func(string) string) (Enroll, error) {
+	var config Enroll
+	var validationErrors []error
+
+	config.GatewayURL = parseURL(getenv, "BRIDGE_GATEWAY_URL", "wss", &validationErrors)
+	config.CredentialPath = required(getenv, "BRIDGE_CREDENTIAL_PATH", &validationErrors)
+
+	if err := errors.Join(validationErrors...); err != nil {
+		return Enroll{}, fmt.Errorf("invalid enroll configuration: %w", err)
+	}
+	return config, nil
+}

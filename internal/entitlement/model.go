@@ -58,10 +58,16 @@ const (
 	ActionDownload  Action = "download"
 )
 
-// Decision is the outcome of Authorize for a subject.
+// Decision is the outcome of Authorize for a subject. Active reports the
+// overall window (trial or license); TrialActive and LicenseActive expose the
+// source so binding-gated surfaces can apply the contract: an active trial
+// covers the enrolled credential-owned device without any paid slot binding,
+// while license-only access is bound to its license's device slots.
 type Decision struct {
-	Active      bool
-	Entitlement Entitlement
+	Active        bool
+	TrialActive   bool
+	LicenseActive bool
+	Entitlement   Entitlement
 }
 
 // Expired reports whether the subject lacks an in-window entitlement.

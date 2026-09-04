@@ -123,9 +123,11 @@ func (a *authenticator) verify(ctx context.Context, token string, _ *http.Reques
 
 // reauthorize re-runs the full authorization pipeline for the session's
 // token digest on every relayed call: token and grant state, resource
-// binding, identity, device ownership and binding, entitlement, and scopes.
-// The digest is the only retained token material, mirroring the hub's live
-// revalidation pattern.
+// binding, identity, device ownership, entitlement, and — for license-only
+// access — the paid slot binding. The digest is the only retained token
+// material, mirroring the hub's live revalidation pattern. An active trial
+// covers the enrolled credential-owned device without any paid binding; the
+// license-only path stays bound to its license's device slots.
 func (g *Gateway) reauthorize(ctx context.Context, digest [32]byte) (Principal, error) {
 	info, err := g.cfg.OAuth.AccessTokenByDigest(ctx, digest, g.cfg.Now())
 	if err != nil {
@@ -142,10 +144,6 @@ func (g *Gateway) reauthorize(ctx context.Context, digest [32]byte) (Principal, 
 	if err != nil || !owned {
 		return Principal{}, fmt.Errorf("%w: device ownership", errSessionInvalid)
 	}
-	bound, err := g.cfg.Store.HasActiveDeviceBinding(ctx, info.Grant.UserID, info.Grant.DeviceID)
-	if err != nil || !bound {
-		return Principal{}, fmt.Errorf("%w: device binding", errSessionInvalid)
-	}
 	decision, err := g.cfg.Entitlements.Authorize(ctx, entitlement.Subject{
 		UserID:          info.Grant.UserID,
 		Provider:        identity.Provider,
@@ -156,6 +154,14 @@ func (g *Gateway) reauthorize(ctx context.Context, digest [32]byte) (Principal, 
 	}
 	if !decision.Permits(entitlement.ActionMCP) {
 		return Principal{}, fmt.Errorf("%w: entitlement window closed", errSessionInvalid)
+	}
+	// License-only access is bound to the paid device slots; an active trial
+	// covers the enrolled credential-owned active device without a binding.
+	if !decision.TrialActive {
+		bound, err := g.cfg.Store.HasActiveDeviceBinding(ctx, info.Grant.UserID, info.Grant.DeviceID)
+		if err != nil || !bound {
+			return Principal{}, fmt.Errorf("%w: device binding", errSessionInvalid)
+		}
 	}
 	return Principal{Token: info.Token, Grant: info.Grant}, nil
 }

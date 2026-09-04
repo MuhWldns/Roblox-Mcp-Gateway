@@ -128,10 +128,6 @@ func (a *Authenticator) AuthenticateDigest(ctx context.Context, digest [32]byte)
 	if err != nil || !owned {
 		return reject("device is not active for owner")
 	}
-	bound, err := a.store.HasActiveDeviceBinding(ctx, record.UserID, record.DeviceID)
-	if err != nil || !bound {
-		return reject("device has no active license binding")
-	}
 	identity, err := a.store.UserIdentity(ctx, record.UserID)
 	if err != nil {
 		return reject("no active identity")
@@ -146,6 +142,16 @@ func (a *Authenticator) AuthenticateDigest(ctx context.Context, digest [32]byte)
 	}
 	if !decision.Permits(entitlement.ActionWSS) {
 		return reject("entitlement does not permit wss")
+	}
+	// License-only access is bound to the paid device slots: the credential's
+	// device must hold an active binding. An active trial covers the enrolled
+	// credential-owned active device without any paid binding — the first
+	// enrollment creates the trial, device, and credential, never a binding.
+	if !decision.TrialActive {
+		bound, err := a.store.HasActiveDeviceBinding(ctx, record.UserID, record.DeviceID)
+		if err != nil || !bound {
+			return reject("device has no active license binding")
+		}
 	}
 	return Device{
 		UserID:           record.UserID,

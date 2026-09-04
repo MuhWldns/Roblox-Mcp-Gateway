@@ -526,8 +526,55 @@ func TestBridgeHubRejectsExpiredTrial(t *testing.T) {
 	fx.dialRejected(t, fx.credential, http.StatusUnauthorized)
 }
 
-func TestBridgeHubRejectsUnboundDevice(t *testing.T) {
+// An active trial covers the credential-owned active device without a paid
+// slot binding: the first enrollment creates the trial, device, and
+// credential — never a binding — so the WSS dial must upgrade and serve.
+func TestBridgeHubActiveTrialWithoutPaidBindingUpgrades(t *testing.T) {
 	fx := newBridgeFixture(t, func(spec *fixtureSpec) {
+		spec.licenseStatus = "" // trial-only: no paid license path at all
+		spec.withBinding = false
+	})
+	ws := fx.dialAuthenticated(t)
+	defer ws.CloseNow()
+	client := newBridgeClientReader(ws)
+	fx.sendHelloEnvelope(t, ws, fx.deviceID)
+	fx.awaitRegistryLen(t, 1, 2*time.Second)
+	// The upgraded connection serves relayed envelopes.
+	if err := fx.registry.Send(t.Context(), fx.deviceID, fx.statusEnvelope()); err != nil {
+		t.Fatalf("send on trial-only connection: %v", err)
+	}
+	select {
+	case env := <-client.messages:
+		if env.DeviceID != fx.deviceID {
+			t.Fatalf("unexpected envelope %#v", env)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for envelope on trial-only connection")
+	}
+}
+
+// An expired trial with an active paid license keeps the device on WSS
+// through its slot binding: the license fallback stays binding-enforced.
+func TestBridgeHubExpiredTrialWithLicensedBindingUpgrades(t *testing.T) {
+	fx := newBridgeFixture(t, func(spec *fixtureSpec) {
+		spec.trialStartedAt = time.Now().Add(-15 * 24 * time.Hour)
+		spec.trialEndsAt = time.Now().Add(-time.Hour)
+		spec.licenseStatus = "active"
+		spec.withBinding = true
+	})
+	ws := fx.dialAuthenticated(t)
+	defer ws.CloseNow()
+	fx.sendHelloEnvelope(t, ws, fx.deviceID)
+	fx.awaitRegistryLen(t, 1, 2*time.Second)
+}
+
+// License-only access without a slot binding is refused: the paid path binds
+// devices to license slots.
+func TestBridgeHubLicenseOnlyWithoutBindingRejected(t *testing.T) {
+	fx := newBridgeFixture(t, func(spec *fixtureSpec) {
+		spec.trialStartedAt = time.Now().Add(-15 * 24 * time.Hour)
+		spec.trialEndsAt = time.Now().Add(-time.Hour)
+		spec.licenseStatus = "active"
 		spec.withBinding = false
 	})
 	fx.dialRejected(t, fx.credential, http.StatusUnauthorized)
