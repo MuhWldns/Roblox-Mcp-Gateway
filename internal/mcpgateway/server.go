@@ -78,9 +78,25 @@ type Config struct {
 	SessionTimeout time.Duration
 	// MaxRequestBytes bounds /mcp request bodies.
 	MaxRequestBytes int64
+	// Usage optionally records one usage row per completed relayed tool
+	// call, keyed idempotently by the gateway request id. Nil disables
+	// usage accounting; relays never fail because of it.
+	Usage UsageRecorder
 	// Now supplies the authorization clock; nil defaults to time.Now.
 	Now func() time.Time
 }
+
+// UsageRecorder persists one usage record per relayed request. The gateway
+// request id makes the increment idempotent: the same id counted twice
+// writes one row.
+type UsageRecorder interface {
+	Increment(ctx context.Context, gatewayRequestID string, usage audit.Usage) error
+}
+
+// defaultSuccessAuditQueue bounds the buffered success-path audit events.
+// Overflow drops the newest events and counts them instead of blocking a
+// tool call behind persistence.
+const defaultSuccessAuditQueue = 1024
 
 // Gateway is the authenticated MCP Streamable HTTP endpoint.
 type Gateway struct {
@@ -91,6 +107,7 @@ type Gateway struct {
 	origins       map[string]bool
 	metadataURL   string
 	sdk           *mcp.StreamableHTTPHandler
+	success       *audit.Queue
 }
 
 // NewGateway validates the configuration and composes the transport.
@@ -183,6 +200,14 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 	}
 
+	successQueue, err := audit.NewQueue(cfg.Audit, defaultSuccessAuditQueue)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	// The success drain runs for the process lifetime; enqueueing stays
+	// non-blocking and bounded regardless of persistence latency.
+	go successQueue.Serve(context.Background())
+
 	gateway := &Gateway{
 		cfg: cfg,
 		authenticator: &authenticator{
@@ -196,6 +221,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		policy:      Policy{},
 		origins:     origins,
 		metadataURL: metadataURL,
+		success:     successQueue,
 	}
 	gateway.sdk = mcp.NewStreamableHTTPHandler(gateway.newSessionServer, &mcp.StreamableHTTPOptions{
 		SessionTimeout:      cfg.SessionTimeout,
@@ -262,6 +288,26 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 	})
 	server.AddReceivingMiddleware(g.sessionMiddleware(digest))
 	return server
+}
+
+// FlushSuccessAudit drains the bounded success-audit queue synchronously.
+// It exists for bounded shutdown draining and for tests; production
+// traffic is served by the queue's background drain.
+func (g *Gateway) FlushSuccessAudit(ctx context.Context) {
+	if g == nil || g.success == nil {
+		return
+	}
+	g.success.Flush(ctx)
+}
+
+// SuccessAuditDropped reports how many success-path audit events were
+// discarded because the bounded queue was full. A rising count means the
+// success audit trail is incomplete.
+func (g *Gateway) SuccessAuditDropped() int64 {
+	if g == nil || g.success == nil {
+		return 0
+	}
+	return g.success.Dropped()
 }
 
 // withCorrelationHeader seeds the audit correlation id for one request.

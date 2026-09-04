@@ -130,21 +130,37 @@ func (r *Relay) CancelSession(sessionID string) {
 	r.pending.CancelSession(sessionID)
 }
 
+// CallTrace reports where one relayed call was delivered. The gateway
+// request id keys usage accounting; the device and studio identify the
+// resolved target.
+type CallTrace struct {
+	GatewayRequestID string
+	DeviceID         string
+	StudioID         string
+}
+
 // Call relays one JSON-RPC request to the grant's resolved target and
 // returns the device's raw JSON-RPC response payload. It blocks until the
 // response arrives, the timeout elapses, or the caller cancels; timeout
 // and cancellation also deliver a cancel envelope to the device so Studio
 // stops working immediately.
 func (r *Relay) Call(ctx context.Context, sessionID string, grant mcpoauth.Grant, method string, params json.RawMessage) (json.RawMessage, error) {
+	payload, _, err := r.CallDetailed(ctx, sessionID, grant, method, params)
+	return payload, err
+}
+
+// CallDetailed relays one JSON-RPC request and additionally reports the
+// trace of where it was delivered. The correlation rules are Call's.
+func (r *Relay) CallDetailed(ctx context.Context, sessionID string, grant mcpoauth.Grant, method string, params json.RawMessage) (json.RawMessage, CallTrace, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if sessionID == "" {
-		return nil, fmt.Errorf("%w: session is required", ErrInvalidRequest)
+		return nil, CallTrace{}, fmt.Errorf("%w: session is required", ErrInvalidRequest)
 	}
 	target, err := r.resolveTarget(grant)
 	if err != nil {
-		return nil, err
+		return nil, CallTrace{}, err
 	}
 
 	requestID := r.nextRequestID()
@@ -155,22 +171,22 @@ func (r *Relay) Call(ctx context.Context, sessionID string, grant mcpoauth.Grant
 		Params:  params,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode request", ErrInvalidResponse)
+		return nil, CallTrace{}, fmt.Errorf("%w: encode request", ErrInvalidResponse)
 	}
 	deadline := time.Now().Add(r.timeout)
 
 	gatewayID, results, err := r.pending.Register(sessionID, requestID, deadline)
 	if err != nil {
 		if errors.Is(err, ErrTooManyPending) {
-			return nil, ErrBusy
+			return nil, CallTrace{}, ErrBusy
 		}
-		return nil, fmt.Errorf("%w: register request", ErrInvalidResponse)
+		return nil, CallTrace{}, fmt.Errorf("%w: register request", ErrInvalidResponse)
 	}
 	if err := r.pending.Associate(gatewayID, target.DeviceID); err != nil {
 		// Associate before delivery is the contract; a failure here means
 		// the request already completed, which cannot happen on a fresh id.
 		_ = r.pending.Resolve(gatewayID, Result{Err: ErrInvalidResponse})
-		return nil, fmt.Errorf("%w: associate request", ErrInvalidResponse)
+		return nil, CallTrace{}, fmt.Errorf("%w: associate request", ErrInvalidResponse)
 	}
 
 	// Retire the correlation when the live connection ends, so device
@@ -178,7 +194,7 @@ func (r *Relay) Call(ctx context.Context, sessionID string, grant mcpoauth.Grant
 	conn, online := r.registry.Get(target.DeviceID)
 	if !online {
 		_ = r.pending.Resolve(gatewayID, Result{Err: ErrDeviceGone})
-		return nil, ErrDeviceGone
+		return nil, CallTrace{}, ErrDeviceGone
 	}
 	watcherDone := make(chan struct{})
 	go func() {
@@ -200,7 +216,7 @@ func (r *Relay) Call(ctx context.Context, sessionID string, grant mcpoauth.Grant
 		Payload:          payload,
 	}); err != nil {
 		_ = r.pending.Resolve(gatewayID, Result{Err: ErrDeviceGone})
-		return nil, ErrDeviceGone
+		return nil, CallTrace{}, ErrDeviceGone
 	}
 
 	select {
@@ -211,15 +227,15 @@ func (r *Relay) Call(ctx context.Context, sessionID string, grant mcpoauth.Grant
 			if errors.Is(result.Err, ErrDeadlineExceeded) || errors.Is(result.Err, ErrCancelled) {
 				r.sendCancel(target.DeviceID, gatewayID)
 			}
-			return nil, classifyResult(result.Err)
+			return nil, CallTrace{GatewayRequestID: gatewayID, DeviceID: target.DeviceID, StudioID: target.StudioID}, classifyResult(result.Err)
 		}
 		if err := validateRelayResponse(result.Payload, requestID); err != nil {
-			return nil, err
+			return nil, CallTrace{GatewayRequestID: gatewayID, DeviceID: target.DeviceID, StudioID: target.StudioID}, err
 		}
-		return result.Payload, nil
+		return result.Payload, CallTrace{GatewayRequestID: gatewayID, DeviceID: target.DeviceID, StudioID: target.StudioID}, nil
 	case <-ctx.Done():
 		r.sendCancel(target.DeviceID, gatewayID)
-		return nil, ErrCancelled
+		return nil, CallTrace{GatewayRequestID: gatewayID, DeviceID: target.DeviceID, StudioID: target.StudioID}, ErrCancelled
 	}
 }
 

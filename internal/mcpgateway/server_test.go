@@ -120,6 +120,7 @@ type gatewaySpec struct {
 	licenseStatus string        // "" = no license row (expired-trial fixture)
 	tokenExpiry   time.Duration // relative to now; negative = already expired
 	tokenRevoked  bool
+	usage         UsageRecorder // optional per-test usage recorder
 	trialEndsAt   time.Duration // relative to now; negative = expired trial
 }
 
@@ -331,6 +332,7 @@ func newGatewayFixture(t *testing.T, mutate func(*gatewaySpec)) *gatewayFixture 
 		Implementation: mcp.Implementation{Name: "RobloxKit Remote Gateway", Version: gatewayTestVersion},
 		RequestTimeout: defaultRequestTO,
 		SessionTimeout: time.Hour,
+		Usage:          spec.usage,
 		Now:            time.Now,
 	})
 	if err != nil {

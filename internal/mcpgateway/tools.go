@@ -8,6 +8,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"robloxkit/internal/audit"
+	"robloxkit/internal/mcpoauth"
 )
 
 // The two relayed MCP methods. Everything else — initialize, ping,
@@ -16,6 +19,13 @@ const (
 	methodListTools = "tools/list"
 	methodCallTool  = "tools/call"
 )
+
+// auditActionToolCall is the success-path audit action. Denials keep the
+// synchronous mcp.request_denied action; this one rides the bounded queue.
+const auditActionToolCall = "mcp.tool_call"
+
+// usageOperations are the usage accounting operation codes.
+const usageOperationToolCall = "tools/call"
 
 // sessionMiddleware intercepts the relayed methods on one MCP session and
 // re-authorizes the session principal on every call: token and grant state,
@@ -84,12 +94,17 @@ func (g *Gateway) handleToolsCall(ctx context.Context, req mcp.Request, digest [
 		return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope for tool"}
 	}
 
-	response, err := g.relay.Call(ctx, sessionIDOf(req), principal.Grant,
+	response, trace, err := g.relay.CallDetailed(ctx, sessionIDOf(req), principal.Grant,
 		methodCallTool, marshalParams(req.GetParams()))
 	if err != nil {
 		return nil, relayError(err)
 	}
 	result, wireErr := parseRelayResponse(response)
+	outcome := "success"
+	if wireErr != nil {
+		outcome = "error"
+	}
+	g.recordToolUsage(trace, principal.Grant, outcome)
 	if wireErr != nil {
 		return nil, wireErr
 	}
@@ -97,7 +112,53 @@ func (g *Gateway) handleToolsCall(ctx context.Context, req mcp.Request, digest [
 	if err := json.Unmarshal(result, &callResult); err != nil {
 		return nil, sanitizedInternalError()
 	}
+	g.recordToolSuccess(ctx, trace, principal.Grant, params.Name)
 	return &callResult, nil
+}
+
+// recordToolSuccess enqueues one bounded-queue audit event for a completed
+// tool call. The event carries only safe identifiers — never parameters,
+// results, or tokens. Failures to enqueue (a saturated queue) are counted
+// on the gateway's drop metric; the call result is unaffected.
+func (g *Gateway) recordToolSuccess(ctx context.Context, trace CallTrace, grant mcpoauth.Grant, tool string) {
+	if g == nil || g.success == nil {
+		return
+	}
+	g.success.Record(audit.Event{
+		Actor:         audit.Actor{UserID: grant.UserID, Kind: audit.ActorUser},
+		Action:        auditActionToolCall,
+		CorrelationID: correlationFrom(ctx),
+		Reason:        "success",
+		UserID:        grant.UserID,
+		TargetType:    auditTargetConnectorGrant,
+		TargetID:      grant.ID,
+		After: map[string]string{
+			"tool":   tool,
+			"device": trace.DeviceID,
+		},
+	})
+}
+
+// recordToolUsage accounts one completed relayed call against the usage
+// recorder, keyed idempotently by the gateway request id. Accounting is
+// best-effort: a recorder failure never fails the relayed call, and a nil
+// recorder disables it entirely.
+func (g *Gateway) recordToolUsage(trace CallTrace, grant mcpoauth.Grant, outcome string) {
+	if g == nil || g.cfg.Usage == nil {
+		return
+	}
+	// Detach from the request context so the write survives the response
+	// being flushed and the client disconnecting mid-write.
+	ctx := context.WithoutCancel(context.Background())
+	_ = g.cfg.Usage.Increment(ctx, trace.GatewayRequestID, audit.Usage{
+		UserID:          grant.UserID,
+		DeviceID:        trace.DeviceID,
+		StudioSessionID: trace.StudioID,
+		Operation:       usageOperationToolCall,
+		Outcome:         outcome,
+		Units:           1,
+		Metadata:        map[string]string{"grant_id": grant.ID},
+	})
 }
 
 // filterTools removes every tool the granted scopes do not permit. The

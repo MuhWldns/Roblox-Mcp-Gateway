@@ -124,10 +124,31 @@ func main() {
 	oauthStore := mysqlstore.NewOAuthStore(db)
 	probes := health.NewHandler(db, nil)
 
+	// Endpoint rate limits: one conservative default per class, keyed by
+	// remote host for unauthenticated endpoints and by session user for
+	// admin executes. The /mcp class is an outer brake on top of the
+	// per-grant limiter inside the MCP gateway itself.
+	limits, err := httpserver.NewLimiter(httpserver.LimiterConfig{
+		Budgets: map[httpserver.Class]httpserver.Budget{
+			httpserver.ClassLogin:  {Burst: 10, Refill: 10, Interval: time.Minute},
+			httpserver.ClassOAuth:  {Burst: 20, Refill: 20, Interval: time.Minute},
+			httpserver.ClassEnroll: {Burst: 20, Refill: 20, Interval: time.Minute},
+			httpserver.ClassWSS:    {Burst: 10, Refill: 10, Interval: time.Minute},
+			httpserver.ClassAdmin:  {Burst: 20, Refill: 20, Interval: time.Minute},
+			httpserver.ClassMCP:    {Burst: 120, Refill: 120, Interval: time.Minute, MaxInFlight: 8},
+		},
+	})
+	if err != nil {
+		log.Printf("rate limiter setup failed: %v", err)
+		os.Exit(1)
+	}
+
 	// The administration surface is enabled unconditionally; the configured
 	// ADMIN_USER_IDS decide who may execute. An empty list leaves every
 	// endpoint answering 403.
 	router, err := httpserver.NewRouter(httpserver.Config{
+		Limits: limits,
+
 		Sessions:         sessions,
 		RobloxAuth:       robloxHandler,
 		IdentityReader:   deviceStore,

@@ -77,6 +77,11 @@ type Config struct {
 	// endpoint. It stays outside the session and CSRF middleware.
 	MCP http.Handler
 
+	// OAuth optionally mounts the connector authorization-server endpoints
+	// (authorize, token, revocation) — typically mcpoauth.Provider.Handler.
+	// It stays outside the session and CSRF middleware.
+	OAuth http.Handler
+
 	// Bridge optionally mounts the device-authenticated Bridge WebSocket
 	// endpoint. It also stays outside the session and CSRF middleware.
 	Bridge http.Handler
@@ -91,6 +96,13 @@ type Config struct {
 	// The endpoints live inside the session and CSRF subtree; every
 	// request is additionally gated on the configured admin user ids.
 	Admin *AdminConfig
+
+	// Limits optionally enforces per-class endpoint rate limits over the
+	// mounted login, OAuth, enrollment, Bridge dial, admin execute, and
+	// MCP endpoints. Health probes, the discovery documents, and static
+	// assets are never limited. A nil limiter leaves every endpoint
+	// unlimited; production composition should always supply one.
+	Limits *Limiter
 
 	AllowedOrigin *url.URL
 	StaticDir     string
@@ -153,6 +165,13 @@ func NewRouter(cfg Config) (http.Handler, error) {
 		admin = newAdminAPI(cfg)
 	}
 
+	// Endpoint rate limits: each class wraps only its own endpoints, keyed
+	// by the session user where one is already established and by the
+	// remote host for unauthenticated endpoints. A nil limiter is a
+	// pass-through at every mount.
+	limit := func(class Class, keyOf func(*http.Request) string, next http.Handler) http.Handler {
+		return cfg.Limits.Middleware(class, keyOf)(next)
+	}
 	csrf := NewCSRF()
 	lookup := &device.EnrollmentLookupHandler{Sessions: cfg.Sessions, Enrollment: cfg.Enrollment}
 	approve := &device.EnrollmentApproveHandler{Sessions: cfg.Sessions, Enrollment: cfg.Enrollment}
@@ -169,22 +188,18 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	}
 
 	// Browser API subtree. The CSRF double-submit guard wraps the whole
-	// subtree: session-carrying mutations must present the pair, while
-	// Bridge-side endpoints that POST without a session cookie fall
-	// through unchanged. The body bound applies only here — /mcp and
-	// /bridge keep their own request limits.
 	api := http.NewServeMux()
-	api.HandleFunc("/api/v1/auth/roblox/login", cfg.RobloxAuth.Begin)
-	api.HandleFunc("/api/v1/auth/roblox/callback", cfg.RobloxAuth.Callback)
+	api.Handle("/api/v1/auth/roblox/login", limit(ClassLogin, RemotePrincipal, http.HandlerFunc(cfg.RobloxAuth.Begin)))
+	api.Handle("/api/v1/auth/roblox/callback", limit(ClassLogin, RemotePrincipal, http.HandlerFunc(cfg.RobloxAuth.Callback)))
 	api.Handle("/api/v1/auth/logout", logout)
 	api.Handle("/api/v1/me", me)
 	api.Handle("/api/v1/csrf", requireSession(cfg.Sessions, http.HandlerFunc(csrf.Issue)))
 	api.Handle("/api/v1/bridge/download/metadata", cfg.DownloadMetadata)
 	api.Handle("/api/v1/bridge/download", cfg.Download)
-	api.Handle("/api/v1/enrollments/claim", lookup)
-	api.Handle("/api/v1/enrollments/approve", approve)
-	api.Handle("/api/v1/device/enrollment/begin", begin)
-	api.Handle("/api/v1/device/enrollment/exchange", exchange)
+	api.Handle("/api/v1/enrollments/claim", limit(ClassEnroll, RemotePrincipal, lookup))
+	api.Handle("/api/v1/enrollments/approve", limit(ClassEnroll, RemotePrincipal, approve))
+	api.Handle("/api/v1/device/enrollment/begin", limit(ClassEnroll, RemotePrincipal, begin))
+	api.Handle("/api/v1/device/enrollment/exchange", limit(ClassEnroll, RemotePrincipal, exchange))
 	// Dashboard routes are session-bound: the session middleware validates
 	// the cookie and injects the user id every handler reads.
 	sessionBound := func(handler http.HandlerFunc) http.Handler {
@@ -205,7 +220,12 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	// and mint version tokens; mutations verify them before executing.
 	if admin != nil {
 		adminBound := func(handler http.HandlerFunc) http.Handler {
-			return requireSession(cfg.Sessions, admin.authorized(handler))
+			// The execute endpoints sit behind the session and the
+			// administrator gate, so the class key is the authenticated
+			// admin's user id: one admin's exhaustion never throttles
+			// another's.
+			limited := limit(ClassAdmin, SessionPrincipal, http.HandlerFunc(handler))
+			return requireSession(cfg.Sessions, admin.authorized(limited.ServeHTTP))
 		}
 		api.Handle("GET /api/v1/admin/users/{user_id}/transfer-preview", adminBound(admin.transferPreview))
 		api.Handle("GET /api/v1/admin/users/{user_id}/recovery-preview", adminBound(admin.recoveryPreview))
@@ -218,10 +238,17 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", limitBody(bodyLimit(cfg))(csrf.Require(api)))
 	if cfg.MCP != nil {
-		mux.Handle("/mcp", cfg.MCP)
+		// The gateway enforces its own per-grant and per-user limits
+		// inside; this outer bound is the coarse per-peer brake.
+		mux.Handle("/mcp", limit(ClassMCP, RemotePrincipal, cfg.MCP))
 	}
 	if cfg.Bridge != nil {
-		mux.Handle("/bridge", cfg.Bridge)
+		// The dial is authenticated by the credential header after the
+		// limiter, so the key is the remote host.
+		mux.Handle("/bridge", limit(ClassWSS, RemotePrincipal, cfg.Bridge))
+	}
+	if cfg.OAuth != nil {
+		mux.Handle("/oauth/", limit(ClassOAuth, RemotePrincipal, cfg.OAuth))
 	}
 	mux.HandleFunc("GET /healthz", cfg.Health.Live)
 	mux.HandleFunc("GET /readyz", cfg.Health.Ready)
