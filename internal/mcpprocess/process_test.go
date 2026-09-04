@@ -34,7 +34,7 @@ func TestProcessInitializeToolsListAndEcho(t *testing.T) {
 		{
 			name:     "tools list",
 			request:  `{"jsonrpc":"2.0","id":"list-2","method":"tools/list","params":{}}`,
-			expected: `{"jsonrpc":"2.0","id":"list-2","result":{"tools":[{"name":"echo","description":"Echoes text","inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}}]}}`,
+			expected: `{"jsonrpc":"2.0","id":"list-2","result":{"tools":[{"name":"echo","description":"Echoes text","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}}]}}`,
 		},
 		{
 			name:     "echo tool call",
