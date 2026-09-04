@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,7 +17,9 @@ import (
 	"robloxkit/internal/audit"
 	"robloxkit/internal/device"
 	"robloxkit/internal/entitlement"
+	"robloxkit/internal/health"
 	"robloxkit/internal/httpserver"
+	"robloxkit/internal/mcpoauth"
 	"robloxkit/internal/mysqlstore"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
@@ -106,6 +109,19 @@ func main() {
 		log.Printf("bridge artifact unavailable: %v", err)
 		os.Exit(1)
 	}
+	// The OAuth discovery documents share the gateway origin: the issuer is
+	// the public MCP resource origin, so the /mcp challenge, the well-known
+	// document locations, and the issuer claim always agree.
+	resource := config.MCPResourceURL
+	issuer := &url.URL{Scheme: resource.Scheme, Host: resource.Host}
+	metadata, err := mcpoauth.NewMetadata(issuer, resource, mcpoauth.SupportedScopes)
+	if err != nil {
+		log.Printf("oauth metadata setup failed: %v", err)
+		os.Exit(1)
+	}
+
+	dashboard := mysqlstore.NewDashboardStore(db, auditService)
+	probes := health.NewHandler(db, nil)
 
 	router, err := httpserver.NewRouter(httpserver.Config{
 		Sessions:         sessions,
@@ -115,6 +131,9 @@ func main() {
 		Download:         download,
 		DownloadMetadata: downloadMetadata,
 		Enrollment:       enrollment,
+		Dashboard:        dashboard,
+		Health:           probes,
+		Metadata:         &metadata,
 		AllowedOrigin:    config.AllowedOrigin,
 		StaticDir:        env("WEB_STATIC_DIR", ""),
 	})

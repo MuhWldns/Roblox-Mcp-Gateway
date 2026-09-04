@@ -1,7 +1,12 @@
 // Package httpserver composes the public gateway routes: Roblox login and
 // logout, the authenticated Bridge download, the device enrollment approval
-// flow, the session-owned /api/v1/me view, and CSRF issuance — all under an
-// exact-origin CORS policy.
+// flow, the session-owned dashboard API, the liveness and readiness probes,
+// and the OAuth discovery documents — under an exact-origin CORS policy and
+// the shared security middleware.
+//
+// The bearer-authenticated /mcp endpoint and the device-authenticated
+// /bridge endpoint are mounted, when configured, outside the session and
+// CSRF middleware: browser cookie policy never gates them.
 package httpserver
 
 import (
@@ -16,8 +21,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"robloxkit/internal/dashboard"
 	"robloxkit/internal/device"
 	"robloxkit/internal/entitlement"
+	"robloxkit/internal/health"
+	"robloxkit/internal/mcpoauth"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
 )
@@ -47,8 +55,39 @@ type Config struct {
 	Download         *device.DownloadHandler
 	DownloadMetadata *device.DownloadMetadataHandler
 	Enrollment       *device.Enrollment
-	AllowedOrigin    *url.URL
-	StaticDir        string
+
+	// Dashboard backs the devices, studios, connectors, license, and
+	// diagnostics reads and the self-service mutations.
+	Dashboard dashboard.Store
+
+	// Registry exposes live Bridge presence; nil reports every device
+	// offline and skips the disconnect on device revocation.
+	Registry BridgeRegistry
+
+	// Health serves /healthz and /readyz.
+	Health *health.Handler
+
+	// Metadata publishes the OAuth discovery documents. It must come from
+	// mcpoauth.NewMetadata; the served well-known paths are derived from
+	// it so the /mcp challenge, the metadata location, and the issuer
+	// always agree.
+	Metadata *mcpoauth.Metadata
+
+	// MCP optionally mounts the bearer-authenticated MCP Streamable HTTP
+	// endpoint. It stays outside the session and CSRF middleware.
+	MCP http.Handler
+
+	// Bridge optionally mounts the device-authenticated Bridge WebSocket
+	// endpoint. It also stays outside the session and CSRF middleware.
+	Bridge http.Handler
+
+	// MaxBodyBytes bounds /api/ request bodies; zero selects
+	// DefaultMaxBodyBytes. The /mcp and /bridge stacks bound their own
+	// bodies and are never wrapped by this limit.
+	MaxBodyBytes int64
+
+	AllowedOrigin *url.URL
+	StaticDir     string
 }
 
 type userIDKeyType struct{}
@@ -79,6 +118,15 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	if cfg.Enrollment == nil {
 		invalid = append(invalid, "enrollment service is required")
 	}
+	if cfg.Dashboard == nil {
+		invalid = append(invalid, "dashboard store is required")
+	}
+	if cfg.Health == nil {
+		invalid = append(invalid, "health handler is required")
+	}
+	if cfg.Metadata == nil {
+		invalid = append(invalid, "oauth metadata is required")
+	}
 	if cfg.AllowedOrigin == nil {
 		invalid = append(invalid, "allowed origin is required")
 	}
@@ -91,26 +139,112 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	approve := &device.EnrollmentApproveHandler{Sessions: cfg.Sessions, Enrollment: cfg.Enrollment}
 	begin := &device.EnrollmentBeginHandler{Enrollment: cfg.Enrollment}
 	exchange := &device.EnrollmentExchangeHandler{Enrollment: cfg.Enrollment}
-	logout := csrf.Require(requireSession(cfg.Sessions, &logoutHandler{sessions: cfg.Sessions}))
+	logout := requireSession(cfg.Sessions, &logoutHandler{sessions: cfg.Sessions})
 	me := requireSession(cfg.Sessions, &meHandler{identities: cfg.IdentityReader, entitlement: cfg.Entitlements})
+	dashboard := &dashboardAPI{
+		store:        cfg.Dashboard,
+		sessions:     cfg.Sessions,
+		identities:   cfg.IdentityReader,
+		entitlements: cfg.Entitlements,
+		registry:     cfg.Registry,
+	}
+
+	// Browser API subtree. The CSRF double-submit guard wraps the whole
+	// subtree: session-carrying mutations must present the pair, while
+	// Bridge-side endpoints that POST without a session cookie fall
+	// through unchanged. The body bound applies only here — /mcp and
+	// /bridge keep their own request limits.
+	api := http.NewServeMux()
+	api.HandleFunc("/api/v1/auth/roblox/login", cfg.RobloxAuth.Begin)
+	api.HandleFunc("/api/v1/auth/roblox/callback", cfg.RobloxAuth.Callback)
+	api.Handle("/api/v1/auth/logout", logout)
+	api.Handle("/api/v1/me", me)
+	api.Handle("/api/v1/csrf", requireSession(cfg.Sessions, http.HandlerFunc(csrf.Issue)))
+	api.Handle("/api/v1/bridge/download/metadata", cfg.DownloadMetadata)
+	api.Handle("/api/v1/bridge/download", cfg.Download)
+	api.Handle("/api/v1/enrollments/claim", lookup)
+	api.Handle("/api/v1/enrollments/approve", approve)
+	api.Handle("/api/v1/device/enrollment/begin", begin)
+	api.Handle("/api/v1/device/enrollment/exchange", exchange)
+	// Dashboard routes are session-bound: the session middleware validates
+	// the cookie and injects the user id every handler reads.
+	sessionBound := func(handler http.HandlerFunc) http.Handler {
+		return requireSession(cfg.Sessions, handler)
+	}
+	api.Handle("GET /api/v1/devices", sessionBound(dashboard.devices))
+	api.Handle("POST /api/v1/devices/{device_id}/rename", sessionBound(dashboard.renameDevice))
+	api.Handle("POST /api/v1/devices/{device_id}/revoke", sessionBound(dashboard.revokeDevice))
+	api.Handle("GET /api/v1/studios", sessionBound(dashboard.studios))
+	api.Handle("GET /api/v1/connectors", sessionBound(dashboard.connectors))
+	api.Handle("POST /api/v1/connectors/{grant_id}/target", sessionBound(dashboard.setConnectorTarget))
+	api.Handle("POST /api/v1/connectors/{grant_id}/revoke", sessionBound(dashboard.revokeConnector))
+	api.Handle("GET /api/v1/license", sessionBound(dashboard.license))
+	api.Handle("GET /api/v1/diagnostics", sessionBound(dashboard.diagnostics))
+	api.Handle("POST /api/v1/sessions/revoke-all", sessionBound(dashboard.revokeAllSessions))
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/auth/roblox/login", cfg.RobloxAuth.Begin)
-	mux.HandleFunc("/api/v1/auth/roblox/callback", cfg.RobloxAuth.Callback)
-	mux.Handle("/api/v1/auth/logout", logout)
-	mux.Handle("/api/v1/me", me)
-	mux.Handle("/api/v1/csrf", requireSession(cfg.Sessions, http.HandlerFunc(csrf.Issue)))
-	mux.Handle("/api/v1/bridge/download/metadata", cfg.DownloadMetadata)
-	mux.Handle("/api/v1/bridge/download", cfg.Download)
-	mux.Handle("/api/v1/enrollments/claim", lookup)
-	mux.Handle("/api/v1/enrollments/approve", csrf.Require(approve))
-	mux.Handle("/api/v1/device/enrollment/begin", begin)
-	mux.Handle("/api/v1/device/enrollment/exchange", exchange)
+	mux.Handle("/api/", limitBody(bodyLimit(cfg))(csrf.Require(api)))
+	if cfg.MCP != nil {
+		mux.Handle("/mcp", cfg.MCP)
+	}
+	if cfg.Bridge != nil {
+		mux.Handle("/bridge", cfg.Bridge)
+	}
+	mux.HandleFunc("GET /healthz", cfg.Health.Live)
+	mux.HandleFunc("GET /readyz", cfg.Health.Ready)
+	if err := mountMetadata(mux, *cfg.Metadata); err != nil {
+		return nil, err
+	}
 	if cfg.StaticDir != "" {
 		mux.Handle("/", spaHandler(cfg.StaticDir))
 	}
 
-	return exactOrigin(cfg.AllowedOrigin)(mux), nil
+	// From the outside in: the exact-origin CORS policy first so allowed
+	// preflights and CORS headers apply even to sanitized panic responses;
+	// then panic recovery, request id assignment and echo, and the fixed
+	// security headers around every route.
+	return exactOrigin(cfg.AllowedOrigin)(RecoverPanics(requestID(secureHeaders(mux)))), nil
+}
+
+// bodyLimit resolves the configured /api/ body bound.
+func bodyLimit(cfg Config) int64 {
+	if cfg.MaxBodyBytes > 0 {
+		return cfg.MaxBodyBytes
+	}
+	return DefaultMaxBodyBytes
+}
+
+// mountMetadata registers the two OAuth discovery documents at the well-known
+// locations derived from the published issuer and resource, guaranteeing the
+// /mcp challenge, the document location, and the issuer always agree.
+func mountMetadata(mux *http.ServeMux, meta mcpoauth.Metadata) error {
+	resource, err := url.Parse(meta.ProtectedResource().Resource)
+	if err != nil {
+		return fmt.Errorf("%w: parse protected resource: %v", ErrInvalidConfig, err)
+	}
+	protectedURL, err := mcpoauth.ProtectedResourceMetadataURL(resource)
+	if err != nil {
+		return fmt.Errorf("%w: derive protected-resource location: %v", ErrInvalidConfig, err)
+	}
+	protected, err := url.Parse(protectedURL)
+	if err != nil {
+		return fmt.Errorf("%w: parse protected-resource location: %v", ErrInvalidConfig, err)
+	}
+	issuer, err := url.Parse(meta.AuthorizationServer().Issuer)
+	if err != nil {
+		return fmt.Errorf("%w: parse issuer: %v", ErrInvalidConfig, err)
+	}
+	authorizationServerURL, err := mcpoauth.AuthorizationServerMetadataURL(issuer)
+	if err != nil {
+		return fmt.Errorf("%w: derive authorization-server location: %v", ErrInvalidConfig, err)
+	}
+	authorizationServer, err := url.Parse(authorizationServerURL)
+	if err != nil {
+		return fmt.Errorf("%w: parse authorization-server location: %v", ErrInvalidConfig, err)
+	}
+	mux.HandleFunc("GET "+protected.Path, serveProtectedResourceMetadata(meta))
+	mux.HandleFunc("GET "+authorizationServer.Path, serveAuthorizationServerMetadata(meta))
+	return nil
 }
 
 // requireSession validates the web session cookie and injects the user id.
