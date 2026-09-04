@@ -92,8 +92,14 @@ export async function approveEnrollment(code: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   const token = await ensureCsrf();
-  return request<void>("/api/v1/auth/logout", {
-    method: "POST",
-    headers: { "X-CSRF-Token": token },
-  });
+  try {
+    await request<void>("/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "X-CSRF-Token": token },
+    });
+  } finally {
+    // The session is gone; the token minted for it must not leak into the
+    // next sign-in, so the next mutation fetches a fresh CSRF token.
+    csrfToken = null;
+  }
 }
