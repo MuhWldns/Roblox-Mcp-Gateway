@@ -182,10 +182,51 @@ const (
 	DefaultMaxRedirects     = 3
 )
 
+// Well-known path prefixes from RFC 8414 §3 and RFC 9728 §3. URLs whose
+// path is empty publish the bare prefix; every other path is appended.
+const (
+	wellKnownProtectedResource   = "/.well-known/oauth-protected-resource"
+	wellKnownAuthorizationServer = "/.well-known/oauth-authorization-server"
+)
+
 const (
 	fetchUserAgent = "robloxkit-mcp-oauth"
 	dialTimeout    = 10 * time.Second
 )
+
+// ProtectedResourceMetadataURL returns the RFC 9728 well-known URL of the
+// protected-resource metadata document for resource. It is the value every
+// /mcp WWW-Authenticate challenge points at via resource_metadata, and the
+// document location the connector's discovery step fetches.
+func ProtectedResourceMetadataURL(resource *url.URL) (string, error) {
+	return wellKnownURL(resource, wellKnownProtectedResource, "resource")
+}
+
+// AuthorizationServerMetadataURL returns the RFC 8414 well-known URL of the
+// authorization-server metadata document for issuer.
+func AuthorizationServerMetadataURL(issuer *url.URL) (string, error) {
+	return wellKnownURL(issuer, wellKnownAuthorizationServer, "issuer")
+}
+
+// wellKnownURL inserts the RFC 8414/9728 well-known prefix before the URL's
+// path. Query, fragment, and credentials never cross into the well-known
+// document location.
+func wellKnownURL(target *url.URL, prefix, name string) (string, error) {
+	if target == nil {
+		return "", fmt.Errorf("mcpoauth: %s is required", name)
+	}
+	resolved := cloneURL(target)
+	resolved.RawQuery = ""
+	resolved.Fragment = ""
+	resolved.RawFragment = ""
+	resolved.User = nil
+	if resolved.Path == "" || resolved.Path == "/" {
+		resolved.Path = prefix
+	} else {
+		resolved.Path = prefix + resolved.Path
+	}
+	return resolved.String(), nil
+}
 
 // ipPolicy reports whether a resolved address may be dialed.
 type ipPolicy func(net.IP) bool
