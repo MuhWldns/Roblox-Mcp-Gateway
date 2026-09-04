@@ -1,11 +1,14 @@
 package httpserver
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -103,6 +106,20 @@ func (t *wroteHeaderTracker) WriteHeader(status int) {
 func (t *wroteHeaderTracker) Write(p []byte) (int, error) {
 	t.wrote = true
 	return t.ResponseWriter.Write(p)
+}
+
+// Hijack forwards connection hijacking to the wrapped writer when it
+// supports hijacking, so WebSocket endpoints mounted behind panic
+// recovery upgrade normally instead of failing with 501. A hijacked
+// connection no longer speaks HTTP: mark it written so recovery never
+// attempts a second status line on it.
+func (t *wroteHeaderTracker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := t.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("httpserver: response writer does not support hijacking")
+	}
+	t.wrote = true
+	return hijacker.Hijack()
 }
 
 // RecoverPanics converts a handler panic into a sanitized 500 response. The

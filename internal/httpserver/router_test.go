@@ -954,6 +954,44 @@ func TestRecoverPanicsUnit(t *testing.T) {
 	}
 }
 
+func TestRecoverPanicsForwardsHijackerForWebSocketUpgrades(t *testing.T) {
+	// Regression: the panic-recovery wrapper must forward http.Hijacker to
+	// the real writer, or any WSS mount inside the router answers 501 on
+	// upgrade. Also proves a panic after the hijack stays silent instead of
+	// writing a bogus second response onto the raw connection.
+	upgrader := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("ResponseWriter behind RecoverPanics does not implement http.Hijacker")
+			return
+		}
+		conn, buf, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nhijacked-ok\n")
+		_ = buf.Flush()
+		panic("boom after hijack")
+	})
+	server := httptest.NewServer(httpserver.RecoverPanics(upgrader))
+	defer server.Close()
+
+	res, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "hijacked-ok") {
+		t.Fatalf("status = %d body = %q, want 200 with hijacked marker", res.StatusCode, body)
+	}
+	if strings.Contains(string(body), "internal server error") {
+		t.Fatalf("recovery wrote a second response onto the hijacked connection: %q", body)
+	}
+}
+
 func TestRouterAppliesSecureHeadersToEveryResponse(t *testing.T) {
 	stack := newRouterStack(t)
 
