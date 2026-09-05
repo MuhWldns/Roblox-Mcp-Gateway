@@ -11,6 +11,8 @@ import Enroll from "./routes/Enroll";
 import ErrorPage from "./routes/ErrorPage";
 import License from "./routes/License";
 import Login from "./routes/Login";
+import Privacy from "./routes/Privacy";
+import Terms from "./routes/Terms";
 import Studios from "./routes/Studios";
 import TrialExtension from "./routes/TrialExtension";
 import DeviceTransfer from "./routes/DeviceTransfer";
@@ -55,6 +57,8 @@ export function appRoutes(): RouteObject[] {
       errorElement: <ErrorPage />,
       children: [{ index: true, element: <Navigate to="/devices" replace /> }, ...dashboardSections],
     },
+    { path: "/privacy", element: <Privacy /> },
+    { path: "/terms", element: <Terms /> },
     { path: "/login", element: <Login /> },
     { path: "/download", element: <Download /> },
     { path: "/enroll", element: <Enroll /> },

@@ -42,9 +42,9 @@ export default function Connectors() {
       setConnectors(connectorList.connectors);
       setDevices(deviceList.devices);
       setStudios(studioList.studios);
-      setTargets({});
       setFailed(false);
-    } catch (error) {
+      setActionError(null);
+    } catch (error: unknown) {
       if (error instanceof UnauthorizedError) {
         setDenied(true);
         return;
@@ -61,10 +61,8 @@ export default function Connectors() {
     devices !== null ? devices.filter((device) => device.status === "active") : [];
 
   function targetOf(connector: ConnectorView): ConnectorTarget {
-    const edited = targets[connector.id];
-    if (edited !== undefined) {
-      return edited;
-    }
+    const current = targets[connector.id];
+    if (current) return current;
     return {
       deviceId: connector.device_id,
       studioSessionId: connector.studio_session_id ?? "",
@@ -72,72 +70,65 @@ export default function Connectors() {
   }
 
   function activeStudiosOn(deviceId: string): StudioView[] {
-    if (studios === null) {
-      return [];
-    }
+    if (studios === null) return [];
     return studios.filter(
-      (studio) => studio.status === "active" && studio.device_id === deviceId,
+      (studio) => studio.device_id === deviceId && studio.status === "active",
     );
   }
 
   function deviceName(deviceId: string): string {
-    const device = devices?.find((entry) => entry.id === deviceId);
+    if (devices === null) return deviceId;
+    const device = devices.find((d) => d.id === deviceId);
     return device !== undefined ? device.name : deviceId;
   }
 
   function studioLabel(studioSessionId: string): string {
-    const studio = studios?.find((entry) => entry.id === studioSessionId);
+    if (studios === null) return studioSessionId;
+    const studio = studios.find((s) => s.id === studioSessionId);
     return studio !== undefined ? studio.studio_id : studioSessionId;
   }
 
   // A grant with a device but no explicit Studio cannot route while several
   // Studio sessions are live on that device — the resolver refuses to guess.
   function ambiguousStudioCount(connector: ConnectorView): number {
-    if (connector.studio_session_id !== null || connector.device_id === "") {
-      return 0;
-    }
-    return activeStudiosOn(connector.device_id).length;
+    if (connector.studio_session_id !== null) return 0;
+    const target = targetOf(connector);
+    if (target.studioSessionId !== "") return 0;
+    return activeStudiosOn(target.deviceId).length;
   }
 
   async function saveTarget(connector: ConnectorView) {
     const target = targetOf(connector);
-    if (target.deviceId === "") {
-      setActionError("Pick a device before saving the target.");
-      return;
-    }
     setBusy(true);
+    setActionError(null);
     try {
-      await setConnectorTarget(connector.id, target.deviceId, target.studioSessionId);
-      setActionError(null);
+      await setConnectorTarget(
+        connector.id,
+        target.deviceId,
+        target.studioSessionId !== "" ? target.studioSessionId : "",
+      );
       await load();
-    } catch (error) {
-      if (error instanceof UnauthorizedError) {
-        setDenied(true);
-      } else {
-        setActionError("Saving the target failed. Please try again.");
-      }
+    } catch (error: unknown) {
+      setActionError(
+        error instanceof Error ? error.message : "Save failed. Try again.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   async function confirmRevoke() {
-    if (revoking === null) {
-      return;
-    }
+    if (revoking === null) return;
     setBusy(true);
+    setActionError(null);
     try {
       await revokeConnector(revoking.id);
       setRevoking(null);
-      setActionError(null);
       await load();
-    } catch (error) {
-      setRevoking(null);
-      if (error instanceof UnauthorizedError) {
-        setDenied(true);
-      } else {
-        setActionError("Revoking the connector failed. Please try again.");
-      }
+    } catch (error: unknown) {
+      setActionError(
+        error instanceof Error ? error.message : "Revoke failed. Try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -148,43 +139,75 @@ export default function Connectors() {
   }
 
   return (
-    <section data-testid="page-connectors" aria-labelledby="connectors-title">
-      <h2 id="connectors-title">Connectors</h2>
-      <p>AI connectors authorized to reach your Studio through the gateway.</p>
-      {actionError ? <p role="alert">{actionError}</p> : null}
-      {failed ? (
-        <p role="alert">Connectors unavailable right now. Reload to try again.</p>
+    <section
+      data-testid="page-connectors"
+      aria-labelledby="connectors-title"
+      className="animate-[pageEnter_200ms_ease]"
+    >
+      <h2 id="connectors-title" className="text-xl font-semibold text-navy mb-1">
+        Connectors
+      </h2>
+      <p className="text-text-secondary mb-6">
+        AI connectors authorized to reach your Studio through the gateway.
+      </p>
+      {actionError ? (
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
+          {actionError}
+        </div>
       ) : null}
-      {connectors === null && !failed ? <p role="status">Loading connectors…</p> : null}
+      {failed ? (
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
+          Connectors unavailable right now. Reload to try again.
+        </div>
+      ) : null}
+      {connectors === null && !failed ? (
+        <p role="status" className="text-text-muted italic">Loading connectors…</p>
+      ) : null}
       {connectors !== null && connectors.length === 0 ? (
-        <p>
-          No connectors yet. Add the RobloxKit MCP server in ChatGPT or Claude
-          and finish their authorization to see the grant here.
-        </p>
+        <div className="text-center py-12 px-6 bg-white border-2 border-dashed border-border rounded-lg">
+          <p className="text-text-muted">
+            No connectors yet. Add the RobloxKit MCP server in ChatGPT or Claude
+            and finish their authorization to see the grant here.
+          </p>
+        </div>
       ) : null}
       {connectors !== null && connectors.length > 0 ? (
-        <ul>
+        <ul className="list-none p-0 m-0 grid gap-4">
           {connectors.map((connector) => {
             const target = targetOf(connector);
             const candidateStudios = activeStudiosOn(target.deviceId);
             const ambiguousCount = ambiguousStudioCount(connector);
             return (
-              <li key={connector.id} data-testid={`connector-${connector.id}`}>
-                <h3>{connector.client_name}</h3>
-                <p>{connector.client_id}</p>
-                <p data-testid={`connector-scopes-${connector.id}`}>
+              <li
+                key={connector.id}
+                data-testid={`connector-${connector.id}`}
+                className="bg-white border border-border rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4 mb-3">
+                  <h3 className="text-base font-semibold text-navy m-0">
+                    {connector.client_name}
+                  </h3>
+                </div>
+                <p className="text-sm text-text-secondary mb-2">
+                  {connector.client_id}
+                </p>
+                <p className="text-sm text-text-secondary mb-2" data-testid={`connector-scopes-${connector.id}`}>
                   Scopes: {connector.scopes.join(", ")}
                 </p>
-                <p>Resource: {connector.resource}</p>
-                <p data-testid={`connector-target-${connector.id}`}>
+                <p className="text-sm text-text-secondary mb-2">
+                  Resource: {connector.resource}
+                </p>
+                <p className="text-sm text-text-secondary mb-2" data-testid={`connector-target-${connector.id}`}>
                   Target: {deviceName(connector.device_id)}
                   {connector.studio_session_id !== null
                     ? ` · Studio session ${studioLabel(connector.studio_session_id)}`
                     : " · no Studio chosen"}
                 </p>
-                <p>Authorized {connector.created_at.slice(0, 10)}</p>
+                <p className="text-sm text-text-secondary mb-2">
+                  Authorized {connector.created_at.slice(0, 10)}
+                </p>
                 {connector.revoked_at !== null ? (
-                  <p>
+                  <p className="text-sm text-text-secondary">
                     <StatusBadge status="revoked" /> on{" "}
                     {connector.revoked_at.slice(0, 10)}. Its tokens stopped
                     working immediately.
@@ -192,75 +215,107 @@ export default function Connectors() {
                 ) : (
                   <>
                     {ambiguousCount >= 2 ? (
-                      <p role="alert" data-testid={`connector-ambiguity-${connector.id}`}>
+                      <div
+                        role="alert"
+                        data-testid={`connector-ambiguity-${connector.id}`}
+                        className="bg-warning-bg text-warning border border-warning rounded-md px-4 py-3 text-sm font-medium mb-4"
+                      >
                         Requests through this connector are blocked:{" "}
                         {ambiguousCount} Studio sessions are active on{" "}
                         {deviceName(connector.device_id)} and no Studio is
                         chosen. The gateway refuses to guess which Studio to
                         use — pick one below.
-                      </p>
+                      </div>
                     ) : null}
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void saveTarget(connector);
-                      }}
-                    >
-                      <label htmlFor={`target-device-${connector.id}`}>Device</label>
-                      {activeDevices.length > 0 ? (
-                        <select
-                          id={`target-device-${connector.id}`}
-                          value={target.deviceId}
-                          onChange={(event) =>
-                            setTargets((previous) => ({
-                              ...previous,
-                              [connector.id]: {
-                                deviceId: event.target.value,
-                                studioSessionId: "",
-                              },
-                            }))
+                    <div className="bg-surface-alt border border-border-light rounded-md p-4 my-3">
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveTarget(connector);
+                        }}
+                        className="space-y-3"
+                      >
+                        <div>
+                          <label
+                            htmlFor={`target-device-${connector.id}`}
+                            className="block text-[13px] font-semibold text-navy mb-1"
+                          >
+                            Device
+                          </label>
+                          {activeDevices.length > 0 ? (
+                            <select
+                              id={`target-device-${connector.id}`}
+                              value={target.deviceId}
+                              onChange={(event) =>
+                                setTargets((previous) => ({
+                                  ...previous,
+                                  [connector.id]: {
+                                    deviceId: event.target.value,
+                                    studioSessionId: "",
+                                  },
+                                }))
+                              }
+                              className="w-full max-w-full font-sans text-[15px] text-navy bg-white border border-border rounded-md px-3 py-2 transition-colors focus:outline-none focus:border-red focus:shadow-[0_0_0_3px_var(--color-red-light)]"
+                            >
+                              {activeDevices.map((device) => (
+                                <option key={device.id} value={device.id}>
+                                  {device.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="text-sm text-text-muted">
+                              No active devices to target.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`target-studio-${connector.id}`}
+                            className="block text-[13px] font-semibold text-navy mb-1"
+                          >
+                            Studio session
+                          </label>
+                          <select
+                            id={`target-studio-${connector.id}`}
+                            value={target.studioSessionId}
+                            onChange={(event) =>
+                              setTargets((previous) => ({
+                                ...previous,
+                                [connector.id]: {
+                                  deviceId: target.deviceId,
+                                  studioSessionId: event.target.value,
+                                },
+                              }))
+                            }
+                            className="w-full max-w-full font-sans text-[15px] text-navy bg-white border border-border rounded-md px-3 py-2 transition-colors focus:outline-none focus:border-red focus:shadow-[0_0_0_3px_var(--color-red-light)]"
+                          >
+                            <option value="">None — this device only</option>
+                            {candidateStudios.map((studio) => (
+                              <option key={studio.id} value={studio.id}>
+                                {studio.studio_id}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={
+                            busy ||
+                            target.deviceId === "" ||
+                            activeDevices.length === 0
                           }
+                          className="px-4 py-2 text-sm font-medium bg-red text-white border border-red rounded-md hover:bg-red-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
-                          {activeDevices.map((device) => (
-                            <option key={device.id} value={device.id}>
-                              {device.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <p>No active devices to target.</p>
-                      )}
-                      <label htmlFor={`target-studio-${connector.id}`}>
-                        Studio session
-                      </label>
-                      <select
-                        id={`target-studio-${connector.id}`}
-                        value={target.studioSessionId}
-                        onChange={(event) =>
-                          setTargets((previous) => ({
-                            ...previous,
-                            [connector.id]: {
-                              deviceId: target.deviceId,
-                              studioSessionId: event.target.value,
-                            },
-                          }))
-                        }
-                      >
-                        <option value="">None — this device only</option>
-                        {candidateStudios.map((studio) => (
-                          <option key={studio.id} value={studio.id}>
-                            {studio.studio_id}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="submit"
-                        disabled={busy || target.deviceId === "" || activeDevices.length === 0}
-                      >
-                        Save target
-                      </button>
-                    </form>
-                    <button type="button" onClick={() => setRevoking(connector)}>
+                          Save target
+                        </button>
+                      </form>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRevoking(connector)}
+                      className="px-4 py-2 text-sm font-medium border border-red rounded-md text-red bg-transparent hover:bg-error-bg transition-colors"
+                    >
                       Revoke connector
                     </button>
                   </>

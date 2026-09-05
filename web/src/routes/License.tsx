@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router";
 import {
   type LicenseSnapshot,
+  type LicenseState,
+  type TrialState,
   UnauthorizedError,
   getLicenseSnapshot,
   trialDaysRemaining,
@@ -22,11 +24,12 @@ export default function License() {
         if (!cancelled) setSnapshot(current);
       })
       .catch((error: unknown) => {
+        if (cancelled) return;
         if (error instanceof UnauthorizedError) {
           setDenied(true);
-          return;
+        } else {
+          setFailed(true);
         }
-        if (!cancelled) setFailed(true);
       });
     return () => {
       cancelled = true;
@@ -37,81 +40,185 @@ export default function License() {
     return <Navigate to="/login" replace />;
   }
 
-  const trial = snapshot?.license.trial ?? null;
-  const license = snapshot?.license.license ?? null;
+  const trial: TrialState | null = snapshot?.license.trial ?? null;
+  const license: LicenseState | null = snapshot?.license.license ?? null;
   const remaining =
     trial !== null && trial.active && snapshot !== null
       ? trialDaysRemaining(trial.ends_at, snapshot.clock)
       : 0;
 
   return (
-    <section data-testid="page-license" aria-labelledby="license-title">
-      <h2 id="license-title">License</h2>
+    <section
+      data-testid="page-license"
+      aria-labelledby="license-title"
+      className="animate-[pageEnter_200ms_ease]"
+    >
+      <h2 id="license-title" className="text-xl font-semibold text-navy mb-1">
+        License
+      </h2>
+
       {failed ? (
-        <p role="alert">License unavailable right now. Reload to try again.</p>
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
+          License unavailable right now. Reload to try again.
+        </div>
       ) : null}
-      {snapshot === null && !failed ? <p role="status">Loading license…</p> : null}
 
+      {snapshot === null && !failed ? (
+        <p role="status" className="text-text-muted italic">Loading license…</p>
+      ) : null}
+
+      {/* Active trial */}
       {snapshot !== null && trial !== null && trial.active ? (
-        <section aria-label="Free trial">
-          <h3>Free trial active</h3>
-          <p data-testid="trial-window">
-            Started {trial.started_at.slice(0, 10)} — ends {trial.ends_at.slice(0, 10)}
-          </p>
-          {remaining > 0 ? (
-            <p data-testid="trial-remaining">
-              {remaining === 1 ? "1 day" : `${remaining} days`} remaining
-            </p>
-          ) : null}
-          <p>
-            The trial runs for a fixed 14 × 24 hours and is never paused or
-            reset — reinstalling, revoking devices, or account recovery do not
-            extend it.
-          </p>
+        <section aria-label="Free trial" className="bg-white border border-border rounded-lg p-5 mb-4">
+          <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
+            Free trial
+          </h3>
+          <p className="text-base font-semibold text-navy mb-1">Free trial active</p>
+          <div
+            data-testid="trial-window"
+            className="text-[13px] text-text-muted mb-2"
+          >
+            {trial.started_at.slice(0, 10)} – {trial.ends_at.slice(0, 10)}
+          </div>
+          <div
+            data-testid="trial-remaining"
+            className={`text-4xl font-bold leading-none mb-1 ${
+              remaining <= 3 ? "text-warning" : "text-navy"
+            }`}
+          >
+            {remaining} {remaining === 1 ? "day" : "days"} remaining
+          </div>
         </section>
       ) : null}
 
+      {/* Expired trial */}
       {snapshot !== null && trial !== null && !trial.active ? (
-        <section aria-label="Expired free trial" data-testid="upgrade-cta">
-          <h3>Your free trial has ended</h3>
-          <p>
-            Purchase a license to reconnect your devices. Paid licenses are
-            provisioned by the RobloxKit team for your Roblox account and
-            activate without reinstalling anything.
+        <section
+          aria-label="Expired free trial"
+          data-testid="upgrade-cta"
+          className="bg-white border border-border rounded-lg p-5 mb-4"
+        >
+          <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
+            Free trial
+          </h3>
+          <p className="text-base font-semibold text-red mb-1">
+            Your free trial has ended
           </p>
-          <p>
-            <Link to="/download">Download the latest RobloxBridge</Link> for
-            updates or recovery in the meantime.
+          <p className="text-[13px] text-text-muted mb-4">
+            Ended on {trial.ends_at.slice(0, 10)}.
           </p>
+          <Link
+            to="/download"
+            className="inline-flex items-center px-4 py-2 text-sm font-medium bg-red text-white rounded-md hover:bg-red-hover transition-colors no-underline"
+          >
+            Purchase a license
+          </Link>
         </section>
       ) : null}
 
+      {/* No trial started */}
       {snapshot !== null && trial === null ? (
-        <section aria-label="Trial not started">
-          <h3>No free trial yet</h3>
-          <p>
-            Your one-time 14-day free trial starts only when your first device
-            finishes enrollment. Logging in and downloading never start it.
+        <section
+          aria-label="Trial not started"
+          className="bg-white border border-border rounded-lg p-5 mb-4"
+        >
+          <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
+            Free trial
+          </h3>
+          <h3 className="text-base font-semibold text-navy mb-1">No free trial yet</h3>
+          <p className="text-text-muted mb-0">
+            Your 14-day free trial starts only when your first device is
+            enrolled.{" "}
+            <Link to="/download" className="text-red hover:text-red-hover font-medium">
+              Download RobloxBridge
+            </Link>{" "}
+            to get started.
           </p>
         </section>
       ) : null}
 
+      {/* Paid license section */}
       {snapshot !== null ? (
-        <section aria-label="Paid license">
-          <h3>Paid license</h3>
+        <section
+          aria-label="Paid license"
+          data-testid="license-state"
+          className="bg-white border border-border rounded-lg p-5"
+        >
+          <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
+            Paid license
+          </h3>
+
           {license !== null ? (
-            <p data-testid="license-state">
-              Status: {license.status} · device slots: {license.device_slots} ·
-              active bindings: {license.active_bindings}
-            </p>
+            <dl className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-3 text-sm">
+              <dt className="text-text-muted font-medium">Status</dt>
+              <dd className="text-navy font-semibold">
+                {license.status} · {license.active_bindings}/{license.device_slots} slots used ·{" "}
+                {license.available_slots} available
+              </dd>
+
+              <dt className="text-text-muted font-medium">Owner</dt>
+              <dd data-testid="license-owner" className="text-navy">
+                {snapshot.license.owner.display_name} ({snapshot.license.owner.roblox_id_masked})
+              </dd>
+
+              <dt className="text-text-muted font-medium">Expires</dt>
+              <dd data-testid="license-expiry" className="text-navy">
+                {license.expires_at !== null
+                  ? license.expires_at.slice(0, 10)
+                  : "Unavailable"}
+              </dd>
+
+              <dt className="text-text-muted font-medium">Subscription</dt>
+              <dd data-testid="license-subscription" className="text-navy">
+                {license.subscription_id !== null
+                  ? license.subscription_id
+                  : "Unavailable"}
+              </dd>
+
+              <dt className="text-text-muted font-medium">Slots</dt>
+              <dd data-testid="license-slots" className="text-navy">
+                {license.device_slots} total · {license.active_bindings} active ·{" "}
+                {license.available_slots} available
+              </dd>
+
+              <dt className="text-text-muted font-medium">Scopes</dt>
+              <dd data-testid="license-scopes" className="text-navy">
+                {license.allowed_scopes.length > 0
+                  ? license.allowed_scopes.join(" · ")
+                  : "None allowed"}
+              </dd>
+
+              <dt className="text-text-muted font-medium">Usage</dt>
+              <dd data-testid="license-usage" className="text-navy">
+                {license.current_usage}{" "}
+                {license.usage_limit !== null
+                  ? `/ ${license.usage_limit.toLocaleString("en-US")}`
+                  : "/ Unlimited"}
+              </dd>
+
+              <dt className="text-text-muted font-medium">Transfer</dt>
+              <dd data-testid="license-transfer-status" className="text-navy">
+                {license.transfer_status !== null
+                  ? license.transfer_status.replace(/_/g, " ")
+                  : "Unavailable"}
+              </dd>
+
+              <dt className="text-text-muted font-medium">Recovery</dt>
+              <dd data-testid="license-recovery-status" className="text-navy">
+                {license.recovery_status !== null
+                  ? license.recovery_status.replace(/_/g, " ")
+                  : "Unavailable"}
+              </dd>
+            </dl>
           ) : (
-            <p>No paid license is active on this account yet.</p>
+            <p className="text-text-muted mb-0">
+              No paid license on this account.{" "}
+              <Link to="/download" className="text-red hover:text-red-hover font-medium">
+                Get a license
+              </Link>{" "}
+              to continue after the trial.
+            </p>
           )}
-          <p>
-            Slots bind to devices through enrollment or an audited admin
-            transfer only — revoking a device never frees its slot, and
-            Roblox-identity changes are handled by the support team.
-          </p>
         </section>
       ) : null}
     </section>

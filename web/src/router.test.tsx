@@ -106,6 +106,8 @@ describe("dashboard shell routing", () => {
     await renderShellAt("/devices");
 
     expect(await screen.findByText("Login with Roblox")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe("/privacy");
+    expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
 
   it("renders the authenticated shell with section navigation", async () => {
@@ -120,6 +122,8 @@ describe("dashboard shell routing", () => {
     }
     expect(screen.getByTestId("page-devices").textContent).toMatch(/devices/i);
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe("/privacy");
+    expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
 
   it("navigates between dashboard sections without losing the shell", async () => {
@@ -234,5 +238,35 @@ describe("dashboard shell routing", () => {
     for (const call of calls) {
       expect(call.credentials).toBe("include");
     }
+  });
+
+  it("keeps the privacy policy public and links to the terms", async () => {
+    const calls = installFetch({});
+
+    await renderShellAt("/privacy");
+
+    expect(await screen.findByRole("heading", { name: "Privacy Policy", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "support@rbxskuy.web.id" }).getAttribute("href")).toBe(
+      "mailto:support@rbxskuy.web.id",
+    );
+    expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe(
+      "/terms",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps the terms public and links to the privacy policy", async () => {
+    const calls = installFetch({});
+
+    await renderShellAt("/terms");
+
+    expect(await screen.findByRole("heading", { name: "Terms of Service", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "support@rbxskuy.web.id" }).getAttribute("href")).toBe(
+      "mailto:support@rbxskuy.web.id",
+    );
+    expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe(
+      "/privacy",
+    );
+    expect(calls).toHaveLength(0);
   });
 });
