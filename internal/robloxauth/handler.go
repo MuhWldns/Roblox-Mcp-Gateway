@@ -2,6 +2,7 @@ package robloxauth
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -67,14 +68,14 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	binding, err := r.Cookie(loginBindingCookieName)
 	if err != nil || binding.Value == "" {
-		h.badCallback(w, "invalid login callback")
+		h.badCallback(w, "binding")
 		return
 	}
 	http.SetCookie(w, loginBindingCookie("", -1))
 	query := r.URL.Query()
 	identity, err := h.Flow.Complete(r.Context(), Callback{Code: query.Get("code"), State: query.Get("state"), Binding: binding.Value, Error: query.Get("error")})
 	if err != nil {
-		h.badCallback(w, "invalid login callback")
+		h.badCallback(w, callbackFailureCategory(err))
 		return
 	}
 	user, err := h.Identities.UpsertRobloxIdentity(r.Context(), identity)
@@ -110,11 +111,26 @@ func loginBindingCookie(value string, maxAge int) *http.Cookie {
 	}
 }
 
-func (h *Handler) badCallback(w http.ResponseWriter, message string) {
+func (h *Handler) badCallback(w http.ResponseWriter, category string) {
 	if h.Logger != nil {
-		h.Logger.Print(message)
+		h.Logger.Printf("invalid login callback category=%s", category)
 	}
 	http.Error(w, "invalid login callback", http.StatusBadRequest)
+}
+
+func callbackFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidTransaction), errors.Is(err, ErrExpiredTransaction), errors.Is(err, ErrProviderDenied):
+		return "transaction"
+	case errors.Is(err, ErrTokenExchange):
+		return "token_exchange"
+	case errors.Is(err, ErrUserInfo), errors.Is(err, ErrMissingSubject):
+		return "userinfo"
+	case errors.Is(err, ErrIDTokenValidation), errors.Is(err, ErrIDTokenSubjectMismatch):
+		return "id_token"
+	default:
+		return "flow"
+	}
 }
 
 func (h *Handler) internalError(w http.ResponseWriter, message string) {
