@@ -80,6 +80,35 @@ Two supported layouts:
    Set-ItemProperty -Path $key -Name Environment -Value $envs
    ```
 
+## Interactive first-run (smart mode)
+
+Double-clicking `RobloxBridge.exe` (or running it in any shell without
+`BRIDGE_MODE` set) starts the **smart first-run flow** — the default for
+ordinary desktop users, and deliberately separate from the service path
+documented below:
+
+1. With no saved configuration, the wizard detects the official Roblox MCP
+   launcher under `%LOCALAPPDATA%\Roblox` (manual path entry as the
+   fallback), claims a device id, and performs enrollment against
+   `wss://mcp.rbxskuy.web.id/bridge` (`BRIDGE_GATEWAY_URL` overrides).
+2. The browser opens the verification page automatically. If the opener
+   fails, the window prints `If it did not open, open this URL manually:`
+   followed by the URL and the user code.
+3. On success the non-secret configuration is saved to
+   `%LOCALAPPDATA%\RobloxBridge\config.json` (gateway URL, device id,
+   launcher path) and the DPAPI credential to
+   `%LOCALAPPDATA%\RobloxBridge\device.credential`. Every later run skips
+   the wizard and connects directly.
+4. If `device.credential` is deleted but `config.json` remains, the flow
+   re-enrolls with the SAME device id; the dashboard keeps recognizing the
+   machine. Other failures (wrong launcher path, rejected enrollment) are
+   terminal and reported on the console.
+
+The explicit modes remain: `BRIDGE_MODE=local`, `remote`, `enroll`,
+`service`. An unknown value or blank is now the smart flow (it used to be
+local). The service environment always sets `BRIDGE_MODE=service`, so the
+change cannot affect a properly installed service.
+
 ## Enroll
 
 Enrollment binds the device and — on the first enrollment for the Roblox

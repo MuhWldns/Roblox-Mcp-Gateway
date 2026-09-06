@@ -19,11 +19,13 @@ func getenvWith(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
 }
 
-// The committed selection contract is untouched: BRIDGE_MODE=remote selects
-// the remote gateway mode, anything else (or unset) stays local. Service mode
-// is selected explicitly with BRIDGE_MODE=service or by the Windows service
-// control manager launch detection, which is authoritative while running as
-// the service — a non-service run mode could never report service status.
+// The explicit selection contract is unchanged: BRIDGE_MODE=remote selects
+// the remote gateway mode, local stays local, enroll stays enroll. Service
+// mode is selected explicitly (BRIDGE_MODE=service) or by the Windows
+// service control manager launch detection, which is authoritative while
+// running as the service - a non-service run mode could never report
+// service status. The default (unset, blank, or unknown) is the smart
+// first-run flow instead of local.
 func TestResolveBridgeMode(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -31,15 +33,15 @@ func TestResolveBridgeMode(t *testing.T) {
 		inService  bool
 		want       string
 	}{
-		{"unset stays local", "", false, bridgeModeLocal},
-		{"blank stays local", "   ", false, bridgeModeLocal},
+		{"unset is smart", "", false, bridgeModeSmart},
+		{"blank is smart", "   ", false, bridgeModeSmart},
+		{"unknown value is smart", "cluster", false, bridgeModeSmart},
 		{"explicit local", "local", false, bridgeModeLocal},
 		{"local is case-insensitive", "LOCAL", false, bridgeModeLocal},
 		{"remote selects remote", "remote", false, bridgeModeRemote},
 		{"remote is case-insensitive", " Remote ", false, bridgeModeRemote},
 		{"service selects service", "service", false, bridgeModeService},
 		{"service is case-insensitive", "SERVICE", false, bridgeModeService},
-		{"unknown value stays local", "cluster", false, bridgeModeLocal},
 		{"enroll selects enroll", "enroll", false, bridgeModeEnroll},
 		{"enroll is case-insensitive", "ENROLL", false, bridgeModeEnroll},
 		{"SCM launch wins over enroll", "enroll", true, bridgeModeService},

@@ -24,17 +24,20 @@ import (
 
 const bridgeVersion = "0.1.0"
 
-// Bridge run modes. The committed env contract is unchanged: BRIDGE_MODE=remote
-// selects the remote gateway mode and anything else stays local. Service mode
-// is selected explicitly (BRIDGE_MODE=service) or automatically when the
-// Windows service control manager launched the process; under the service
-// control manager the detection is authoritative, because a non-service run
-// mode could never report service status and would leave the SCM hanging.
+// Bridge run modes. The default double-click mode is smart: it runs from the
+// saved configuration or completes the first-run wizard. The explicit env
+// contract is unchanged: BRIDGE_MODE=remote selects the remote gateway mode,
+// local stays local, and service mode is selected explicitly
+// (BRIDGE_MODE=service) or automatically when the Windows service control
+// manager launched the process; under the service control manager the
+// detection is authoritative, because a non-service run mode could never
+// report service status and would leave the SCM hanging.
 const (
 	bridgeModeLocal   = "local"
 	bridgeModeRemote  = "remote"
 	bridgeModeService = "service"
 	bridgeModeEnroll  = "enroll"
+	bridgeModeSmart   = ""
 )
 
 // serviceLogEnv overrides the structured service log location; the default
@@ -56,15 +59,15 @@ func main() {
 	default:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		runLocal(ctx)
+		runSmart(ctx)
 	}
 }
 
-// resolveBridgeMode keeps the committed selection contract and adds service
-// mode: BRIDGE_MODE=service selects it explicitly, and a process launched by
-// the Windows service control manager always runs in service mode. Existing
-// behavior is untouched: BRIDGE_MODE=remote stays remote, anything else (or
-// unset) stays local.
+// resolveBridgeMode keeps the explicit selection contract and adds the smart
+// default: BRIDGE_MODE=service selects service mode, a process launched by
+// the Windows service control manager always runs in service mode,
+// BRIDGE_MODE=remote stays remote, local stays local, and anything else (or
+// unset) runs the smart first-run flow.
 func resolveBridgeMode(getenv func(string) string, inWindowsService bool) string {
 	if inWindowsService {
 		return bridgeModeService
@@ -74,10 +77,12 @@ func resolveBridgeMode(getenv func(string) string, inWindowsService bool) string
 		return bridgeModeService
 	case bridgeModeEnroll:
 		return bridgeModeEnroll
+	case bridgeModeLocal:
+		return bridgeModeLocal
 	case bridgeModeRemote:
 		return bridgeModeRemote
 	default:
-		return bridgeModeLocal
+		return bridgeModeSmart
 	}
 }
 
