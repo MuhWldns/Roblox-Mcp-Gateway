@@ -18,6 +18,9 @@ var (
 	ErrInvalidTransaction  = errors.New("robloxauth: invalid login transaction")
 	ErrExpiredTransaction  = errors.New("robloxauth: expired login transaction")
 	ErrProviderDenied      = errors.New("robloxauth: provider denied login")
+	ErrTokenExchange       = errors.New("robloxauth: token exchange")
+	ErrUserInfo            = errors.New("robloxauth: userinfo")
+	ErrIDTokenValidation   = errors.New("robloxauth: id_token validation")
 	ErrMissingSubject      = errors.New("robloxauth: userinfo missing subject")
 	ErrTooManyTransactions = errors.New("robloxauth: too many login transactions")
 )
@@ -236,18 +239,18 @@ func (f *Flow) Complete(ctx context.Context, callback Callback) (RobloxIdentity,
 
 	tokens, err := f.client.exchange(ctx, callback.Code, transaction.CodeVerifier)
 	if err != nil {
-		return RobloxIdentity{}, err
+		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrTokenExchange, err)
 	}
 	info, err := f.client.userInfo(ctx, tokens.AccessToken)
 	if err != nil {
-		return RobloxIdentity{}, err
+		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrUserInfo, err)
 	}
 	if strings.TrimSpace(info.Subject) == "" {
 		return RobloxIdentity{}, ErrMissingSubject
 	}
 	idSubject, err := f.jwks.verify(ctx, tokens.IDToken, f.issuer, f.client.clientID, transaction.Nonce)
 	if err != nil {
-		return RobloxIdentity{}, err
+		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrIDTokenValidation, err)
 	}
 	if idSubject != info.Subject {
 		return RobloxIdentity{}, ErrIDTokenSubjectMismatch

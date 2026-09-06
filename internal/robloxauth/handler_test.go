@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,29 @@ func TestRobloxHandlerCallbackRejectsProviderErrorsWithoutCreatingSession(t *tes
 	visible := recorder.Body.String() + logs.String()
 	if strings.Contains(visible, "provider-access-secret") {
 		t.Fatalf("error output/log disclosed provider token: %q", visible)
+	}
+}
+
+func TestRobloxHandlerCallbackLogsSafeFailureCategory(t *testing.T) {
+	flow := &handlerFlow{completeErr: fmt.Errorf("%w: provider-access-secret", ErrTokenExchange)}
+	var logs bytes.Buffer
+	handler := Handler{
+		Flow: flow, Identities: &handlerIdentities{}, Sessions: &handlerSessions{},
+		Logger: log.New(&logs, "", 0),
+	}
+	request := httptest.NewRequest(http.MethodGet, "/auth/roblox/callback?code=provider-code&state=opaque-state", nil)
+	request.AddCookie(&http.Cookie{Name: testBindingCookie, Value: "browser-binding"})
+	recorder := httptest.NewRecorder()
+
+	handler.Callback(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if got := logs.String(); !strings.Contains(got, "category=token_exchange") {
+		t.Fatalf("callback log = %q, want safe token_exchange category", got)
+	} else if strings.Contains(got, "provider-access-secret") || strings.Contains(got, "provider-code") || strings.Contains(got, "opaque-state") {
+		t.Fatalf("callback log disclosed credential material: %q", got)
 	}
 }
 

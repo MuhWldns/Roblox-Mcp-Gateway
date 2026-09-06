@@ -120,7 +120,7 @@ func main() {
 	}
 	robloxHandler := &robloxauth.Handler{
 		Flow: flow, Identities: identities, Sessions: sessions,
-		SuccessRedirect: "/download", SessionMaxAge: sessionLifetime(),
+		SuccessRedirect: "/download", Logger: log.New(slogWriter{logger: logger}, "", 0), SessionMaxAge: sessionLifetime(),
 	}
 
 	artifact := device.Artifact{

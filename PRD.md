@@ -1,8 +1,8 @@
 # PRD — Remote Roblox Studio MCP Gateway & Bridge
 
-**Version:** 3.1  
-**Status:** Approved  
-**Target:** Web, Linux VPS, Windows, dan Roblox Studio  
+**Version:** 3.2
+**Status:** Approved with private-operator addendum
+**Target:** Web, Linux VPS, Windows, dan Roblox Studio
 **Primary goal:** Menghubungkan ChatGPT dan Claude ke Roblox Studio pada komputer user melalui gateway cloud yang aman.
 
 ---
@@ -1382,6 +1382,76 @@ Redis atau messaging system dipilih setelah kebutuhan throughput dan failure mod
 - Roblox OAuth hanya digunakan sesuai scope dan provider policy.
 - Sebelum commercial launch, review Roblox Terms of Use, OAuth/Open Cloud terms, official MCP license, privacy, dan remote-control requirements.
 
+
+### 28.1 Private operator access
+
+Sebelum Roblox OAuth disetujui, satu operator pribadi boleh mengelola gateway
+melalui principal internal `local_admin`. Principal ini bukan Roblox identity,
+tidak memiliki provider token, dan tidak boleh diperlakukan sebagai Roblox
+subject oleh trial/license policy.
+
+- `GET /admin/login` menampilkan form satu secret key; tidak ada registrasi,
+  email login, password reset, magic link, atau TOTP.
+- `POST /api/v1/admin/login` menerima secret di JSON body. Secret dilarang
+  berada di URL, query string, cookie, log, audit field, browser storage, atau
+  executable Bridge.
+- Konfigurasi production menyimpan hanya keyed digest dari secret acak 256-bit.
+  Perbandingan wajib constant-time; respons salah/unknown identik dan endpoint
+  dibatasi per trusted client IP.
+- Login sukses menghasilkan web session biasa untuk satu `local_admin` user.
+  Cookie tetap `Secure`, `HttpOnly`, `SameSite`, host-only, dan session-only
+  tanpa persistent `Max-Age`. Session admin tetap melalui CSRF middleware,
+  authorization admin, logout/revocation, dan audit yang sama.
+- Server membuat user dan identity metadata `local_admin` secara idempotent
+  dari UUID konfigurasi. Identity ini hanya untuk tampilan/session ownership;
+  tidak pernah memenuhi pemeriksaan Roblox identity.
+- Rotasi admin secret mencabut semua session principal `local_admin` sebelum
+  secret baru dipakai. Browser restore dapat memulihkan session cookie; tombol
+  sign-out adalah revocation eksplisit.
+
+### 28.2 Per-device private Bridge grant
+
+Private access adalah capability untuk tepat satu `(user_id, device_id)`, bukan
+license, trial, subscription, atau account-wide bypass.
+
+- Bridge binary tetap artifact release normal. Tidak ada private secret,
+  hard-coded user, license bypass, feature flag tersembunyi, atau code path
+  client-side yang memperbolehkan akses.
+- Bridge clean install memulai pairing normal dan menampilkan short-lived,
+  single-use user code beserta URL verification.
+- `local_admin` membuka `/admin/private-access`, memuat metadata pending claim,
+  lalu menyetujui pairing dengan case id dan reason.
+- Persetujuan atomik mengonsumsi code, membuat device dan hashed device
+  credential untuk principal `local_admin`, dan membuat satu private grant.
+  Persetujuan ini tidak membuat atau mengubah trial, license, subscription,
+  license binding, atau Roblox identity.
+- Grant menyimpan `id`, `user_id`, `device_id`, `status`, `created_by`,
+  `case_id`, `reason`, `created_at`, dan optional `revoked_at`. Hanya satu grant
+  aktif diperbolehkan per device; plaintext device credential tidak pernah
+  dipersistenkan.
+- Bridge WSS tetap wajib lolos credential digest, credential expiry/revocation,
+  device ownership, dan active-device checks. Setelah itu akses diterima jika
+  device mempunyai active private grant atau lolos trial/license + paid-slot
+  policy existing.
+- Connector consent tetap wajib memilih active owned device. Consent diterima
+  jika device mempunyai active private grant atau user/device lolos existing
+  entitlement policy. Grant OAuth tetap device-bound.
+- Setiap MCP request dan relayed tool call mengulang token/grant, ownership,
+  device state, dan private-grant-or-entitlement checks. Revocation private
+  grant menolak call berikutnya tanpa menunggu token expiry.
+- Revocation dari admin atomik dan diaudit, lalu koneksi Bridge device tersebut
+  diputus. Revoke tidak menghapus device, credential history, atau audit rows.
+- Private grant untuk device A tidak pernah mengizinkan device B dari user yang
+  sama. Tidak ada fallback ke user-level private access.
+
+### 28.3 Private access verification
+
+Bukti wajib mencakup: wrong secret, brute-force rate limit, secret tidak muncul
+di log/audit/browser storage, session-only cookie, logout, admin authorization,
+single-use pairing, no trial/license rows after private enrollment, WSS happy
+path, connector consent, MCP call, cross-device denial, revoked grant immediate
+disconnect, post-revoke MCP denial, restart persistence, concurrent approve dan
+revoke, serta MySQL rollback saat audit insert gagal.
 ---
 
 ## 29. Definition of Done
