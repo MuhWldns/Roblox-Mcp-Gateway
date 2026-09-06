@@ -127,8 +127,8 @@ export default function License() {
           </h3>
           <h3 className="text-base font-semibold text-navy mb-1">No free trial yet</h3>
           <p className="text-text-muted mb-0">
-            Your 14-day free trial starts only when your first device is
-            enrolled.{" "}
+            Your 14-day free trial starts only when your first PC is
+            connected.{" "}
             <Link to="/download" className="text-red hover:text-red-hover font-medium">
               Download RobloxBridge
             </Link>{" "}

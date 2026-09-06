@@ -114,7 +114,7 @@ export default function DownloadHero() {
       <div data-testid="trial-notice" className="bg-white border border-border rounded-lg p-6 mb-5">
         <p className="text-sm text-text-secondary">
           Downloading does not start your free trial. Your 14-day trial begins
-          only when you enroll your first device.
+          only when you connect your first PC.
         </p>
       </div>
 
@@ -132,9 +132,9 @@ export default function DownloadHero() {
             <strong className="text-navy">Sign in</strong> with your Roblox
             account on this dashboard, then{" "}
             <Link to="/devices" className="text-red hover:text-red-hover font-medium">
-              enroll your device
+              connect your device
             </Link>
-            . Enrollment starts your 14-day free trial.
+            . Connecting your PC starts your 14-day free trial.
           </li>
           <li>
             <strong className="text-navy">Open Roblox Studio</strong> while

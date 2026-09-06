@@ -118,7 +118,7 @@ export default function Devices() {
         Devices
       </h2>
       <p className="text-text-secondary mb-6">
-        Bridges enrolled on your account. Revoking a device does not free its
+        PCs connected to your account. Revoking a device does not free its
         license slot.
       </p>
       {actionError ? (
@@ -175,7 +175,7 @@ export default function Devices() {
             <Link to="/download" className="text-red hover:text-red-hover font-medium">
               Download RobloxBridge
             </Link>{" "}
-            and enroll your first device — enrollment is what starts your free trial.
+            and connect your first PC — connecting is what starts your free trial.
           </p>
         </div>
       ) : null}
@@ -227,9 +227,9 @@ export default function Devices() {
                 <dd className="text-text-secondary pt-1 break-words" data-testid="device-last-error">
                   {device.last_error ?? "None reported"}
                 </dd>
-                <dt className="font-semibold text-navy pt-1">Enrollment</dt>
+                <dt className="font-semibold text-navy pt-1">Connected</dt>
                 <dd className="text-text-secondary pt-1 break-words">
-                  Enrolled {device.created_at.slice(0, 10)} · last updated{" "}
+                  Connected {device.created_at.slice(0, 10)} · last updated{" "}
                   {device.updated_at.slice(0, 10)}
                 </dd>
               </dl>

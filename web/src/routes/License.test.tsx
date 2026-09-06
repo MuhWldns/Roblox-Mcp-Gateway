@@ -204,14 +204,14 @@ describe("license screen", () => {
     expect(cta.textContent).toMatch(/purchase a license/i);
   });
 
-  it("explains that the trial starts only at first device enrollment", async () => {
+  it("explains that the trial starts only at first PC connection", async () => {
     installFetch({ [licenseUrl]: { json: nothingStarted } });
 
     renderAt("/license", <License />);
 
     const notice = await screen.findByText(/No free trial yet/i);
     expect(notice.tagName).toBe("H3");
-    expect(screen.getByText(/starts only when your first device/i)).toBeTruthy();
+    expect(screen.getByText(/starts only when your first PC/i)).toBeTruthy();
   });
 
   it("offers no self-unbind, self-rebind, or self-transfer control of any kind", async () => {

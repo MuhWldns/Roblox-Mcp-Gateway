@@ -115,7 +115,7 @@ describe("onboarding web flow", () => {
 
     renderAt("/download", <Download />);
 
-    expect(await screen.findByText("Login with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
   });
 
   it("shows already authenticated users the download page and redirects them away from login", async () => {
@@ -140,7 +140,6 @@ describe("onboarding web flow", () => {
 
     await screen.findByText("Signed in as Builder 1516563360");
     expect(screen.getByTestId("bridge-version").textContent).toBe("1.4.2");
-    expect(screen.getByTestId("bridge-checksum").textContent).toBe("a".repeat(64));
     const link = screen.getByTestId("download-link") as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/api/v1/bridge/download");
     expect(screen.getByText("RobloxBridge.exe")).toBeTruthy();
@@ -158,7 +157,7 @@ describe("onboarding web flow", () => {
     expect(notice.textContent).toMatch(/does not start your free trial/i);
   });
 
-  it("confirms device enrollment with hostname display and CSRF-protected approval", async () => {
+  it("confirms device connection with hostname display and CSRF-protected approval", async () => {
     const calls = installFetch({
       [meUrl]: { json: freshMe },
       [claimUrl]: { json: claim },

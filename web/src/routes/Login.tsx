@@ -38,12 +38,29 @@ export default function Login() {
           RobloxKit connects the official Roblox Studio MCP to ChatGPT and Claude
           through your licensed Roblox account.
         </p>
+        <ol className="list-none p-0 m-0 mb-6 text-left space-y-2">
+          {[
+            "Sign in with Roblox",
+            "Connect your PC by entering its pairing code",
+            "Add the MCP connector in ChatGPT or Claude",
+          ].map((step, index) => (
+            <li key={step} className="flex items-start gap-3 text-sm text-text-secondary">
+              <span
+                aria-hidden="true"
+                className="shrink-0 w-6 h-6 rounded-full bg-navy text-white text-xs font-bold flex items-center justify-center"
+              >
+                {index + 1}
+              </span>
+              {step}
+            </li>
+          ))}
+        </ol>
         <button
           type="button"
           onClick={() => window.location.assign("/api/v1/auth/roblox/login")}
           className="w-full px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors min-h-[44px]"
         >
-          Login with Roblox
+          Continue with Roblox
         </button>
         <nav aria-label="Legal" className="flex justify-center gap-5 mt-6 text-xs text-text-secondary">
           <Link to="/privacy" className="hover:text-red underline underline-offset-4">Privacy Policy</Link>

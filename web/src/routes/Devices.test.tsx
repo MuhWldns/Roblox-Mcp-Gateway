@@ -229,6 +229,7 @@ describe("devices screen", () => {
     renderAt("/devices", <Devices />);
 
     expect(await screen.findByText(/no devices/i)).toBeTruthy();
+    expect(screen.getByText(/connect your first PC/i)).toBeTruthy();
   });
 
   it("keeps the section heading and surfaces an inline error when the API fails", async () => {

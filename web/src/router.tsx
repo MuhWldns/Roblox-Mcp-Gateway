@@ -9,6 +9,7 @@ import Diagnostics from "./routes/Diagnostics";
 import Download from "./routes/Download";
 import Enroll from "./routes/Enroll";
 import ErrorPage from "./routes/ErrorPage";
+import Home from "./routes/Home";
 import License from "./routes/License";
 import Login from "./routes/Login";
 import Privacy from "./routes/Privacy";
@@ -51,12 +52,12 @@ const dashboardSections: RouteObject[] = [
 export function appRoutes(): RouteObject[] {
   return [
     {
-      path: "/",
       loader: sessionLoader,
       element: <AppShell />,
       errorElement: <ErrorPage />,
-      children: [{ index: true, element: <Navigate to="/devices" replace /> }, ...dashboardSections],
+      children: [...dashboardSections],
     },
+    { path: "/", element: <Home /> },
     { path: "/privacy", element: <Privacy /> },
     { path: "/terms", element: <Terms /> },
     { path: "/login", element: <Login /> },

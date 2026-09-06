@@ -24,7 +24,7 @@ export default function ErrorPage() {
         </p>
         <button
           type="button"
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/devices")}
           className="inline-flex items-center px-4 py-2 text-sm font-medium bg-red text-white rounded-md hover:bg-red-hover transition-colors"
         >
           Try again

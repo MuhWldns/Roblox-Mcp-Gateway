@@ -33,7 +33,7 @@ export default function EnrollPage() {
       const pending = await getEnrollmentClaim(value);
       setClaim(pending);
     } catch {
-      setError("Enrollment code not found. Check the code shown in RobloxBridge.");
+      setError("Pairing code not found. Check the code shown in RobloxBridge.");
     } finally {
       setBusy(false);
     }
@@ -122,7 +122,7 @@ export default function EnrollPage() {
       className="animate-[pageEnter_200ms_ease]"
     >
       <h2 id="enroll-title" className="text-xl font-semibold text-navy mb-1">
-        Enroll a device
+        Connect a device
       </h2>
       <p className="text-text-secondary mb-2">Signed in as {me.display_name}</p>
       <p className="text-text-secondary mb-6">
@@ -140,7 +140,7 @@ export default function EnrollPage() {
             }}
           >
             <label htmlFor="enrollment-code" className="block text-sm font-semibold text-navy mb-1">
-              Enrollment code
+              Pairing code
             </label>
             <div className="flex flex-col sm:flex-row gap-3">
               <input
@@ -211,7 +211,7 @@ export default function EnrollPage() {
             </p>
           ) : (
             <p role="status" className="text-text-muted italic">
-              Waiting for your device to finish enrollment…
+              Waiting for your device to finish connecting…
             </p>
           )}
         </section>

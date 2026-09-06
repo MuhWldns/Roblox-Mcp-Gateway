@@ -105,7 +105,7 @@ describe("dashboard shell routing", () => {
 
     await renderShellAt("/devices");
 
-    expect(await screen.findByText("Login with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe("/privacy");
     expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
@@ -207,7 +207,7 @@ describe("dashboard shell routing", () => {
       const call = calls.find((entry) => entry.path === "/api/v1/auth/logout");
       expect(call?.headers["x-csrf-token"]).toBe("csrf-first");
     });
-    expect(await screen.findByText("Login with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
 
     // Signing back in must not reuse the CSRF token from the dead session.
     await router.navigate("/enroll?code=rkuc_TEST123");
@@ -232,12 +232,35 @@ describe("dashboard shell routing", () => {
     await renderShellAt("/devices");
     await screen.findByText("Signed in as Builder 1516563360");
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    await screen.findByText("Login with Roblox");
+    await screen.findByText("Continue with Roblox");
 
     expect(calls.length).toBeGreaterThan(2);
     for (const call of calls) {
       expect(call.credentials).toBe("include");
     }
+  });
+
+  it("shows the public home page with a sign-in CTA for unauthenticated visitors", async () => {
+    installFetch({ [meUrl]: { status: 401 } });
+
+    await renderShellAt("/");
+
+    expect(
+      await screen.findByRole("heading", { name: /control roblox studio/i, level: 1 }),
+    ).toBeTruthy();
+    const signIn = screen.getAllByRole("link", { name: "Sign in" });
+    expect(signIn.length).toBeGreaterThan(0);
+    expect(signIn[0].getAttribute("href")).toBe("/login");
+  });
+
+  it("offers authenticated visitors a direct dashboard CTA from the home page", async () => {
+    installFetch({ [meUrl]: { json: freshMe } });
+
+    await renderShellAt("/");
+
+    const cta = await screen.findAllByRole("link", { name: "Open dashboard" });
+    expect(cta.length).toBeGreaterThan(0);
+    expect(cta[0].getAttribute("href")).toBe("/devices");
   });
 
   it("keeps the privacy policy public and links to the terms", async () => {
