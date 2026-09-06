@@ -234,6 +234,68 @@ func TestRunEnrollExpiryIsError(t *testing.T) {
 	}
 }
 
+// TestRunEnrollRetriesRateLimitAfterRetryAfter proves a transient 429 does
+// not terminate enrollment: the client honors Retry-After before exchanging
+// the same device code again.
+func TestRunEnrollRetriesRateLimitAfterRetryAfter(t *testing.T) {
+	srv := newEnrollServer(t, func(attempt int, w http.ResponseWriter) {
+		switch attempt {
+		case 1:
+			w.WriteHeader(http.StatusAccepted)
+		case 2:
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"device_credential": "rkd_after_rate_limit",
+				"device_id":         "device-enroll-test",
+			})
+		}
+	})
+	store := &recordingEnrollStore{}
+	cfg := testEnrollConfig(srv.server.URL, store, io.Discard)
+	started := time.Now()
+
+	if err := RunEnroll(context.Background(), cfg); err != nil {
+		t.Fatalf("RunEnroll after 429: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 900*time.Millisecond {
+		t.Fatalf("RunEnroll retried after %v, want Retry-After delay", elapsed)
+	}
+	if n := srv.exchangeCount(); n != 3 {
+		t.Fatalf("exchange attempts = %d, want 202, 429, then 200", n)
+	}
+	if got := string(store.saved); got != "rkd_after_rate_limit" {
+		t.Fatalf("saved credential = %q", got)
+	}
+}
+
+// TestRunEnrollRateLimitWaitRespectsContext proves a long server-directed
+// backoff remains interruptible and cannot save a credential after cancel.
+func TestRunEnrollRateLimitWaitRespectsContext(t *testing.T) {
+	srv := newEnrollServer(t, func(_ int, w http.ResponseWriter) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	store := &recordingEnrollStore{}
+	cfg := testEnrollConfig(srv.server.URL, store, io.Discard)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := RunEnroll(ctx, cfg)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunEnroll during Retry-After = %v, want context deadline", err)
+	}
+	if n := srv.exchangeCount(); n != 1 {
+		t.Fatalf("exchange attempts = %d, want one before cancellation", n)
+	}
+	if store.saved != nil {
+		t.Fatal("no credential may be saved after cancellation")
+	}
+}
+
 // TestRunEnrollRespectsContextTimeout proves pending-forever polling stops at
 // the context deadline with a clear error.
 func TestRunEnrollRespectsContextTimeout(t *testing.T) {

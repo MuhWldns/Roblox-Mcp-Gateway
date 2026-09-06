@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,9 +21,10 @@ const (
 )
 
 // Enrollment exchange outcome limits. PollInterval bounds how fast the
-// bridge polls a pending approval; the exchange itself decides 202/200/4xx.
+// bridge polls a pending approval. Five seconds stays below the production
+// enrollment budget while Retry-After handles temporary server throttling.
 const (
-	defaultEnrollPollInterval = 2 * time.Second
+	defaultEnrollPollInterval = 5 * time.Second
 	defaultEnrollHTTPTimeout  = 15 * time.Second
 )
 
@@ -116,14 +118,23 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
 		}
-		body, status, err := enrollPostJSONStatus(ctx, client, cfg.APIBaseURL+enrollExchangePath, exchangePayload)
-		if err != nil && status != http.StatusGone {
+		body, status, retryAfter, err := enrollPostJSONStatus(ctx, client, cfg.APIBaseURL+enrollExchangePath, exchangePayload)
+		if err != nil && status != http.StatusGone && status != http.StatusTooManyRequests {
 			return fmt.Errorf("bridgeapp: exchange enrollment: %w", err)
 		}
 		switch {
 		case status == http.StatusAccepted:
 			fmt.Fprintf(cfg.Output, "Waiting for approval…\n")
 			if err := sleepContext(ctx, poll); err != nil {
+				return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
+			}
+			continue
+		case status == http.StatusTooManyRequests:
+			if retryAfter <= 0 {
+				retryAfter = poll
+			}
+			fmt.Fprintf(cfg.Output, "Enrollment temporarily rate limited; retrying…\n")
+			if err := sleepContext(ctx, retryAfter); err != nil {
 				return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
 			}
 			continue
@@ -171,30 +182,34 @@ func (cfg EnrollConfig) validate() error {
 }
 
 func enrollPostJSON(ctx context.Context, client *http.Client, target string, payload []byte) ([]byte, error) {
-	body, _, err := enrollPostJSONStatus(ctx, client, target, payload)
+	body, _, _, err := enrollPostJSONStatus(ctx, client, target, payload)
 	return body, err
 }
 
-func enrollPostJSONStatus(ctx context.Context, client *http.Client, target string, payload []byte) ([]byte, int, error) {
+func enrollPostJSONStatus(ctx context.Context, client *http.Client, target string, payload []byte) ([]byte, int, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, 0, err
+	}
+	retryAfter := time.Duration(0)
+	if seconds, parseErr := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); parseErr == nil && seconds > 0 {
+		retryAfter = time.Duration(seconds) * time.Second
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return body, resp.StatusCode, fmt.Errorf("status %d", resp.StatusCode)
+		return body, resp.StatusCode, retryAfter, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return body, resp.StatusCode, nil
+	return body, resp.StatusCode, retryAfter, nil
 }
 
 // sanitizeStatusBody trims an error body to a bounded, safe message.
