@@ -186,13 +186,14 @@ func TestE2EProductionMatrix(t *testing.T) {
 		clientID := st.registerConnector("https://evil.example/connector", "https://evil.example/callback")
 		authorize := st.authorizeValues(clientID, "https://evil.example/callback")
 		resp := userB.do(http.MethodGet, st.base+"/oauth/authorize?"+authorize.Encode(), nil, nil)
-		_ = st.readBody(resp)
+		csrfToken, consentCookie := mcpConsentCSRF(t, string(st.readBody(resp)), resp)
 		form := authorize
 		form.Set("action", "approve")
 		form.Set("device_id", deviceA)
+		form.Set("csrf_token", csrfToken)
 		form["grant"] = []string{"mcp:connect"}
 		resp = userB.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
-			map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+			map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 		_ = st.readBody(resp)
 		loc, _ := resp.Location()
 		if resp.StatusCode != http.StatusSeeOther || loc == nil || loc.Query().Get("error") != "access_denied" {
@@ -200,14 +201,14 @@ func TestE2EProductionMatrix(t *testing.T) {
 		}
 
 		// (c) Cross-Studio target: another user's Studio session is denied
-		// at consent the same way.
 		form = authorize
 		form.Set("action", "approve")
 		form.Set("device_id", deviceB)
 		form.Set("studio_session_id", "ss-not-user-bs")
+		form.Set("csrf_token", csrfToken)
 		form["grant"] = []string{"mcp:connect"}
 		resp = userB.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
-			map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+			map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 		_ = st.readBody(resp)
 		loc, _ = resp.Location()
 		if resp.StatusCode != http.StatusSeeOther || loc == nil || loc.Query().Get("error") != "access_denied" {
@@ -725,7 +726,7 @@ func (st *liveStack) connectorFlow(session *liveClient, clientID, redirect, devi
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("authorize (consent form) status = %d", resp.StatusCode)
 	}
-	_ = st.readBody(resp)
+	csrfToken, consentCookie := mcpConsentCSRF(t, string(st.readBody(resp)), resp)
 
 	form := url.Values{}
 	for key, values := range authorize {
@@ -734,9 +735,10 @@ func (st *liveStack) connectorFlow(session *liveClient, clientID, redirect, devi
 	form.Set("action", "approve")
 	form.Set("device_id", deviceID)
 	form.Set("studio_session_id", studioSessionID)
+	form.Set("csrf_token", csrfToken)
 	form["grant"] = []string{"mcp:connect", "studio:read", "studio:edit"}
 	resp = session.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
-		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("consent approve status = %d (body %s)", resp.StatusCode, st.readBody(resp))
 	}
@@ -783,13 +785,14 @@ func (st *liveStack) connectorFlowExpectDenial(session *liveClient, clientID str
 	st.t.Helper()
 	authorize := st.authorizeValues(clientID, "https://expired.example/callback")
 	resp := session.do(http.MethodGet, st.base+"/oauth/authorize?"+authorize.Encode(), nil, nil)
-	_ = st.readBody(resp)
+	csrfToken, consentCookie := mcpConsentCSRF(st.t, string(st.readBody(resp)), resp)
 	form := authorize
 	form.Set("action", "approve")
 	form.Set("device_id", "")
+	form.Set("csrf_token", csrfToken)
 	form["grant"] = []string{"mcp:connect"}
 	resp = session.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
-		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 	body := st.readBody(resp)
 	if resp.StatusCode != http.StatusSeeOther {
 		return true
@@ -1017,6 +1020,38 @@ func (st *liveStack) authorizeValues(clientID, redirect string) url.Values {
 		"code_challenge_method": {"S256"},
 		"resource":              {st.base + "/mcp"},
 	}
+}
+
+// mcpConsentCSRF extracts the consent CSRF double-submit pair from a
+// rendered consent form: the csrf_token field value and a Cookie header
+// string carrying the consent CSRF cookie the server just set.
+func mcpConsentCSRF(t *testing.T, body string, resp *http.Response) (token, cookieHeader string) {
+	t.Helper()
+	const field = `name="csrf_token" value="`
+	start := strings.Index(body, field)
+	if start < 0 {
+		t.Fatal("consent form carried no csrf_token field")
+	}
+	start += len(field)
+	end := strings.IndexByte(body[start:], '"')
+	if end < 0 {
+		t.Fatal("consent form csrf_token value is unterminated")
+	}
+	token = body[start : start+end]
+	const consentCookieName = "__Host-robloxkit_consent_csrf"
+	var consentValue string
+	for _, ck := range resp.Cookies() {
+		if ck.Name == consentCookieName && ck.Value != "" {
+			consentValue = ck.Value
+		}
+	}
+	if consentValue == "" {
+		t.Fatal("consent form response carried no CSRF cookie")
+	}
+	// The jar handles the session cookie; the consent cookie is sent
+	// explicitly because __Host- cookies are Secure-only and some test
+	// stacks store them only for https origins.
+	return token, consentCookieName + "=" + consentValue
 }
 
 func base64Raw(data []byte) string {

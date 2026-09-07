@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"robloxkit/internal/appconfig"
 	"robloxkit/internal/audit"
 	"robloxkit/internal/bridgehub"
@@ -21,6 +23,7 @@ import (
 	"robloxkit/internal/entitlement"
 	"robloxkit/internal/health"
 	"robloxkit/internal/httpserver"
+	"robloxkit/internal/mcpgateway"
 	"robloxkit/internal/mcpoauth"
 	"robloxkit/internal/mysqlstore"
 	"robloxkit/internal/robloxauth"
@@ -199,6 +202,53 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The connector OAuth provider (authorize, consent, token, register,
+	// revoke) and the MCP gateway share the public origin and the oauth
+	// pepper. The per-grant limiter inside the gateway bounds tool-call
+	// rates; the outer ClassMCP budget above is an additional brake.
+	mcpLimiter, err := httpserver.NewMCPLimiter(httpserver.MCPLimiterConfig{
+		Requests:    240,
+		Window:      time.Minute,
+		MaxInFlight: 8,
+	})
+	if err != nil {
+		logger.Error("mcp limiter setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+	provider, err := mcpoauth.NewProvider(mcpoauth.Config{
+		Resource:     resource,
+		Store:        oauthStore,
+		DB:           db,
+		Audits:       auditService,
+		Entitlements: entitlements,
+		Sessions:     sessions,
+		Pepper:       pepper,
+		LoginPath:    "/login",
+	})
+	if err != nil {
+		logger.Error("oauth provider setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+	gateway, err := mcpgateway.NewGateway(mcpgateway.Config{
+		OAuth:          oauthStore,
+		Store:          bridgehub.NewSQLStore(db),
+		Entitlements:   entitlements,
+		Audit:          auditService,
+		Registry:       hub.Registry(),
+		Pending:        mcpgateway.NewPending(256),
+		Limiter:        mcpLimiter,
+		Pepper:         pepper,
+		Resource:       resource.String(),
+		AllowedOrigins: []string{config.AllowedOrigin.String()},
+		Implementation: mcp.Implementation{Name: "RobloxKit Remote Gateway", Version: "1.0"},
+		Usage:          mysqlstore.NewUsageStore(db),
+		Now:            time.Now,
+	})
+	if err != nil {
+		logger.Error("mcp gateway setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+
 	// The administration surface is enabled unconditionally; the configured
 	// ADMIN_USER_IDS decide who may execute. An empty list leaves every
 	// endpoint answering 403.
@@ -220,6 +270,8 @@ func main() {
 		},
 		Health:        probes,
 		Metadata:      &metadata,
+		MCP:           work.MCP(gateway.Handler()),
+		OAuth:         provider.Handler(),
 		Bridge:        work.WSS(hub),
 		AllowedOrigin: config.AllowedOrigin,
 		StaticDir:     env("WEB_STATIC_DIR", ""),

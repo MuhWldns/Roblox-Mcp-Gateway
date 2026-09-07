@@ -75,6 +75,7 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
 <input type="hidden" name="state" value="{{.State}}">
 <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
 <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
+<input type="hidden" name="resource" value="{{.Resource}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <fieldset>
 <legend>Scopes</legend>
@@ -253,10 +254,14 @@ func writeProviderError(w http.ResponseWriter, status int, err error) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// ConsentCSRFCookieName is exported so integration tests can locate the
+// consent CSRF cookie in rendered responses.
+const ConsentCSRFCookieName = consentCSRFCookieName
+
 const (
-	consentCSRFCookieName  = "__Host-robloxkit_consent_csrf"
-	consentCSRFTokenBytes  = 32
-	consentCSRFMaxAge      = 10 * time.Minute
+	consentCSRFCookieName = "__Host-robloxkit_consent_csrf"
+	consentCSRFTokenBytes = 32
+	consentCSRFMaxAge     = 10 * time.Minute
 )
 
 // newCSRFToken generates a random URL-safe token for the consent form.
