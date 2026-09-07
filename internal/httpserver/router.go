@@ -228,6 +228,7 @@ func NewRouter(cfg Config) (http.Handler, error) {
 			limited := limit(ClassAdmin, SessionPrincipal, http.HandlerFunc(handler))
 			return requireSession(cfg.Sessions, admin.authorized(limited.ServeHTTP))
 		}
+		api.Handle("GET /api/v1/admin/users", adminBound(admin.listUsers))
 		api.Handle("GET /api/v1/admin/users/{user_id}/transfer-preview", adminBound(admin.transferPreview))
 		api.Handle("GET /api/v1/admin/users/{user_id}/recovery-preview", adminBound(admin.recoveryPreview))
 		api.Handle("GET /api/v1/admin/users/{user_id}/trial-preview", adminBound(admin.trialPreview))

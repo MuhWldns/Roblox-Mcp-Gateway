@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
 import {
   type AdminRecoveryPreview,
   ApiError,
@@ -15,7 +15,8 @@ import StatusBadge from "../components/StatusBadge";
 // and the version token minted by the preview. The trial window is never
 // touched — the plan says so explicitly.
 export default function AccountRecovery() {
-  const [userId, setUserId] = useState("");
+  const [params] = useSearchParams();
+  const [userId, setUserId] = useState(() => params.get("user_id") ?? "");
   const [preview, setPreview] = useState<AdminRecoveryPreview | null>(null);
   const [denied, setDenied] = useState(false);
   const [forbidden, setForbidden] = useState(false);

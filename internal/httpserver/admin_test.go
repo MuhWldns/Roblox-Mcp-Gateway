@@ -340,6 +340,32 @@ func (s *adminStack) seedPaidLicense(t *testing.T) (userID string) {
 
 // ---- authorization ---------------------------------------------------------
 
+func TestAdminUserListAuthorization(t *testing.T) {
+	stack := newAdminStack(t)
+	_, regular := stack.login(t, "list-regular")
+	for _, tc := range []struct {
+		name   string
+		cookie *http.Cookie
+		status int
+	}{
+		{"anonymous", nil, http.StatusUnauthorized},
+		{"regular", regular, http.StatusForbidden},
+		{"admin", stack.adminCookie, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cookies []*http.Cookie
+			if tc.cookie != nil {
+				cookies = append(cookies, tc.cookie)
+			}
+			res := stack.do(t, http.MethodGet, "/api/v1/admin/users", cookies, nil, "")
+			defer res.Body.Close()
+			if res.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tc.status)
+			}
+		})
+	}
+}
+
 func TestAdminEndpointsRequireAdminAuthorization(t *testing.T) {
 	stack := newAdminStack(t)
 	victim := stack.seedPaidLicense(t)
