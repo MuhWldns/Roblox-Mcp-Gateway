@@ -283,17 +283,15 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}()
 		},
 	})
-	// Register well-known placeholder tools so ChatGPT immediately discovers
-	// valid tool declarations during initialize/tools/list even before relay.
-	// When called, sessionMiddleware intercepts and relays dynamically to Bridge.
 	for toolName := range officialToolScopes {
 		name := toolName
 		server.AddTool(&mcp.Tool{
 			Name:        name,
 			Description: "Roblox Studio MCP tool: " + name,
-			InputSchema: json.RawMessage(`{"type":"object"}`),
+			InputSchema: map[string]any{
+				"type": "object",
+			},
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			// Handled dynamically by sessionMiddleware
 			return nil, nil
 		})
 	}
