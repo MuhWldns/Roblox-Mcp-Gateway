@@ -276,7 +276,7 @@ func (fx *mcpFixture) authorizeQuery(mutate func(url.Values)) url.Values {
 	return q
 }
 
-func (fx *mcpFixture) doRequest(t *testing.T, method, path string, form url.Values, cookie string) *http.Response {
+func (fx *mcpFixture) doRequest(t *testing.T, method, path string, form url.Values, cookies ...string) *http.Response {
 	t.Helper()
 	var body io.Reader
 	if form != nil {
@@ -289,8 +289,15 @@ func (fx *mcpFixture) doRequest(t *testing.T, method, path string, form url.Valu
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	if cookie != "" {
-		req.AddCookie(&http.Cookie{Name: session.CookieName, Value: cookie})
+	for i, cookie := range cookies {
+		if cookie == "" {
+			continue
+		}
+		name := session.CookieName
+		if i > 0 {
+			name = mcpoauth.ConsentCSRFCookieName
+		}
+		req.AddCookie(&http.Cookie{Name: name, Value: cookie})
 	}
 	resp, err := fx.httpClient.Do(req)
 	if err != nil {
@@ -313,26 +320,55 @@ func consentForm(q url.Values) url.Values {
 	return form
 }
 
+// consentCSRF performs the GET consent leg and returns the CSRF token the
+// rendered form carries together with the bound consent cookie value, so a
+// POST decision can present the same double-submit pair a browser would.
+func (fx *mcpFixture) consentCSRF(t *testing.T, q url.Values, cookie string) (token, consentCookie string) {
+	t.Helper()
+	resp := fx.authorizeGet(t, q, cookie)
+	body := readAll(t, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("consent form status = %d, want 200 (body: %s)", resp.StatusCode, body)
+	}
+	for _, ck := range resp.Cookies() {
+		if ck.Name == mcpoauth.ConsentCSRFCookieName && ck.Value != "" {
+			consentCookie = ck.Value
+		}
+	}
+	if consentCookie == "" {
+		t.Fatal("consent form response carried no CSRF cookie")
+	}
+	if token = extractFormValue(body, "csrf_token"); token == "" {
+		t.Fatal("consent form carried no csrf_token field")
+	}
+	return token, consentCookie
+}
+
 func (fx *mcpFixture) approveConsent(t *testing.T, q url.Values, mutate func(*url.Values)) *http.Response {
 	t.Helper()
 	cookie := fx.sessionCookie(t, fx.userID)
+	csrf, consentCookie := fx.consentCSRF(t, q, cookie)
 	form := consentForm(q)
 	form.Set("action", "approve")
 	form.Set("device_id", fx.deviceID)
+	form.Set("csrf_token", csrf)
 	form["grant"] = []string{"mcp:connect"}
 	if mutate != nil {
 		mutate(&form)
 	}
-	return fx.doRequest(t, http.MethodPost, mcpoauth.AuthorizePath, form, cookie)
+	return fx.doRequest(t, http.MethodPost, mcpoauth.AuthorizePath, form, cookie, consentCookie)
 }
 
 func (fx *mcpFixture) denyConsent(t *testing.T, q url.Values) *http.Response {
 	t.Helper()
 	cookie := fx.sessionCookie(t, fx.userID)
+	csrf, consentCookie := fx.consentCSRF(t, q, cookie)
 	form := consentForm(q)
 	form.Set("action", "deny")
 	form.Set("device_id", fx.deviceID)
-	return fx.doRequest(t, http.MethodPost, mcpoauth.AuthorizePath, form, cookie)
+	form.Set("csrf_token", csrf)
+	return fx.doRequest(t, http.MethodPost, mcpoauth.AuthorizePath, form, cookie, consentCookie)
 }
 
 // redirectParams asserts a 303 consent outcome and returns the redirect query.
@@ -1092,6 +1128,22 @@ func TestRevokeWrongClientLeavesTokenIntact(t *testing.T) {
 	if n := fx.queryInt(t, "SELECT COUNT(*) FROM oauth_access_tokens WHERE revoked_at IS NOT NULL"); n != 0 {
 		t.Fatalf("revoked access tokens = %d, want 0", n)
 	}
+}
+
+// extractFormValue returns the value attribute of the first input named
+// name in the rendered HTML form, or "" when absent.
+func extractFormValue(body, name string) string {
+	needle := `name="` + name + `" value="`
+	start := strings.Index(body, needle)
+	if start < 0 {
+		return ""
+	}
+	start += len(needle)
+	end := strings.IndexByte(body[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return body[start : start+end]
 }
 
 func readAll(t *testing.T, r io.Reader) string {
