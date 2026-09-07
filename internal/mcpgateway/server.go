@@ -290,6 +290,12 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			Description: "Roblox Studio MCP tool: " + name,
 			InputSchema: map[string]any{
 				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+					"path": map[string]any{"type": "string"},
+					"text": map[string]any{"type": "string"},
+					"code": map[string]any{"type": "string"},
+				},
 			},
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return nil, nil
