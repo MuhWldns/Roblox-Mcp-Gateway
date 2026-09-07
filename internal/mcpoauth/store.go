@@ -16,6 +16,10 @@ type Store interface {
 	// ClientByPublicID returns the registered client for a public client_id.
 	ClientByPublicID(ctx context.Context, publicClientID string) (Client, error)
 
+	// SessionConsent returns the remembered explicit approval for one active
+	// browser-session/client pair. Missing rows return ErrSessionConsentNotFound.
+	SessionConsent(ctx context.Context, webSessionID, clientID string) (SessionConsent, error)
+
 	// SaveAuthorizationCode persists a new single-use authorization code
 	// digest together with its exact resource, client, and redirect binding.
 	SaveAuthorizationCode(ctx context.Context, code AuthorizationCode, digest [32]byte) error

@@ -135,6 +135,40 @@ func (s *OAuthStore) ClientByPublicID(ctx context.Context, publicClientID string
 	return oauthSelectClient(ctx, s.DB, publicClientID)
 }
 
+// SessionConsent returns the remembered approval for one browser session and
+// resolved internal OAuth client. The row carries no credential material.
+func (s *OAuthStore) SessionConsent(ctx context.Context, webSessionID, clientID string) (mcpoauth.SessionConsent, error) {
+	if webSessionID == "" {
+		return mcpoauth.SessionConsent{}, errors.New("mysqlstore: web session id is required")
+	}
+	if clientID == "" {
+		return mcpoauth.SessionConsent{}, errors.New("mysqlstore: OAuth client id is required")
+	}
+	if err := s.check(ctx); err != nil {
+		return mcpoauth.SessionConsent{}, err
+	}
+	var consent mcpoauth.SessionConsent
+	var scopes []byte
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT web_session_id, client_id, grant_id, requested_scopes, resource, created_at, updated_at
+		 FROM oauth_session_consents WHERE web_session_id = ? AND client_id = ?`,
+		webSessionID, clientID,
+	).Scan(&consent.WebSessionID, &consent.ClientID, &consent.GrantID, &scopes, &consent.Resource, &consent.CreatedAt, &consent.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return mcpoauth.SessionConsent{}, mcpoauth.ErrSessionConsentNotFound
+	}
+	if err != nil {
+		return mcpoauth.SessionConsent{}, fmt.Errorf("mysqlstore: find session consent: %w", err)
+	}
+	consent.RequestedScopes, err = oauthScanStrings(scopes)
+	if err != nil {
+		return mcpoauth.SessionConsent{}, err
+	}
+	consent.CreatedAt = consent.CreatedAt.UTC()
+	consent.UpdatedAt = consent.UpdatedAt.UTC()
+	return consent, nil
+}
+
 func (s *OAuthStore) SaveAuthorizationCode(ctx context.Context, code mcpoauth.AuthorizationCode, digest [32]byte) error {
 	if err := s.check(ctx); err != nil {
 		return err

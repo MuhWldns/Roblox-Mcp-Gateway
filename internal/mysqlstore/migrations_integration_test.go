@@ -71,6 +71,10 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 
 	assertCompositeForeignKey(t, db, "usage_records", "studio_session_id", "user_id")
 	assertCompositeForeignKey(t, db, "oauth_refresh_tokens", "parent_id", "user_id")
+	assertUniqueIndex(t, db, "oauth_session_consents", "web_session_id", "client_id")
+	assertForeignKey(t, db, "oauth_session_consents", "web_session_id")
+	assertForeignKey(t, db, "oauth_session_consents", "client_id")
+	assertForeignKey(t, db, "oauth_session_consents", "grant_id")
 	assertTrigger(t, db, "trial_entitlements_no_update")
 	assertTrigger(t, db, "trial_entitlements_no_delete")
 	assertTrigger(t, db, "trial_entitlement_identities_no_update")
@@ -83,8 +87,8 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 6 {
-		t.Fatalf("migration version = %d, want 6", version)
+	if version != 7 {
+		t.Fatalf("migration version = %d, want 7", version)
 	}
 	assertBinaryDigest(t, db, "web_sessions", "token_digest")
 	assertNoPlaintextTokenColumns(t, db)
