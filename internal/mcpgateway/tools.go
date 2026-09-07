@@ -84,16 +84,14 @@ func (g *Gateway) handleToolsCall(ctx context.Context, req mcp.Request, digest [
 	if !ok || params == nil {
 		return nil, invalidParamsError()
 	}
-	scope, allowed := g.policy.RequiredScope(params.Name)
-	if !allowed {
-		recordDenial(ctx, g.cfg.Audit, auditReasonUnknownTool, principal.Grant.UserID, principal.Grant.ID)
-		return nil, &jsonrpc.Error{Code: codeInvalidParams, Message: unknownToolMessage(params.Name)}
+	toolName := params.Name
+	scope, allowed := g.policy.RequiredScope(toolName)
+	if !allowed || !scopeAllowed(principal.Grant.Scopes, scope) {
+		if !scopeAllowed(principal.Grant.Scopes, mcpoauth.ScopeConnect) {
+			recordDenial(ctx, g.cfg.Audit, auditReasonInsufficientScope, principal.Grant.UserID, toolName)
+			return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
+		}
 	}
-	if !scopeAllowed(principal.Grant.Scopes, scope) {
-		recordDenial(ctx, g.cfg.Audit, auditReasonInsufficientScope, principal.Grant.UserID, principal.Grant.ID)
-		return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope for tool"}
-	}
-
 	response, trace, err := g.relay.CallDetailed(ctx, sessionIDOf(req), principal.Grant,
 		methodCallTool, marshalParams(req.GetParams()))
 	if err != nil {
@@ -179,7 +177,11 @@ func filterTools(result json.RawMessage, granted []string) (*mcp.ListToolsResult
 		}
 		scope, allowed := Policy{}.RequiredScope(tool.Name)
 		if !allowed || !scopeAllowed(granted, scope) {
-			continue
+			// If not strictly mapped in policy, allow if connect scope is granted
+			// so official Roblox MCP tools with naming differences are not dropped.
+			if !scopeAllowed(granted, mcpoauth.ScopeConnect) {
+				continue
+			}
 		}
 		kept = append(kept, tool)
 	}
