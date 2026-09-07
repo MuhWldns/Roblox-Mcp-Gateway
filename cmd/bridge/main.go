@@ -18,23 +18,27 @@ import (
 
 	"robloxkit/internal/appconfig"
 	"robloxkit/internal/bridgeapp"
+	"robloxkit/internal/bridgeconfig"
 	"robloxkit/internal/mcpprocess"
 	"robloxkit/internal/statusui"
 )
 
 const bridgeVersion = "0.1.0"
 
-// Bridge run modes. The committed env contract is unchanged: BRIDGE_MODE=remote
-// selects the remote gateway mode and anything else stays local. Service mode
-// is selected explicitly (BRIDGE_MODE=service) or automatically when the
-// Windows service control manager launched the process; under the service
-// control manager the detection is authoritative, because a non-service run
-// mode could never report service status and would leave the SCM hanging.
+// Bridge run modes. The default double-click mode is smart: it runs from the
+// saved configuration or completes the first-run wizard. The explicit env
+// contract is unchanged: BRIDGE_MODE=remote selects the remote gateway mode,
+// local stays local, and service mode is selected explicitly
+// (BRIDGE_MODE=service) or automatically when the Windows service control
+// manager launched the process; under the service control manager the
+// detection is authoritative, because a non-service run mode could never
+// report service status and would leave the SCM hanging.
 const (
 	bridgeModeLocal   = "local"
 	bridgeModeRemote  = "remote"
 	bridgeModeService = "service"
 	bridgeModeEnroll  = "enroll"
+	bridgeModeSmart   = ""
 )
 
 // serviceLogEnv overrides the structured service log location; the default
@@ -56,15 +60,15 @@ func main() {
 	default:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		runLocal(ctx)
+		runSmart(ctx)
 	}
 }
 
-// resolveBridgeMode keeps the committed selection contract and adds service
-// mode: BRIDGE_MODE=service selects it explicitly, and a process launched by
-// the Windows service control manager always runs in service mode. Existing
-// behavior is untouched: BRIDGE_MODE=remote stays remote, anything else (or
-// unset) stays local.
+// resolveBridgeMode keeps the explicit selection contract and adds the smart
+// default: BRIDGE_MODE=service selects service mode, a process launched by
+// the Windows service control manager always runs in service mode,
+// BRIDGE_MODE=remote stays remote, local stays local, and anything else (or
+// unset) runs the smart first-run flow.
 func resolveBridgeMode(getenv func(string) string, inWindowsService bool) string {
 	if inWindowsService {
 		return bridgeModeService
@@ -74,10 +78,12 @@ func resolveBridgeMode(getenv func(string) string, inWindowsService bool) string
 		return bridgeModeService
 	case bridgeModeEnroll:
 		return bridgeModeEnroll
+	case bridgeModeLocal:
+		return bridgeModeLocal
 	case bridgeModeRemote:
 		return bridgeModeRemote
 	default:
-		return bridgeModeLocal
+		return bridgeModeSmart
 	}
 }
 
@@ -197,10 +203,46 @@ func runEnrollFlow(ctx context.Context, config appconfig.Enroll, out io.Writer, 
 	if err != nil {
 		return err
 	}
-
+	// The device id is the installation identity: once a credential exists
+	// for it, re-running enroll would mint a second id, orphan the old
+	// device row, and invite accidental rotations. Refuse instead — the
+	// smart mode re-enrolls with the SAME id, and explicit rotation goes
+	// through the dashboard.
+	if _, err := store.Load(); err == nil {
+		return errors.New("device credential already exists; delete it (or use the smart first-run flow) to re-enroll this device")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read device credential: %w", err)
+	}
+	// Reuse the wizard's device id when one was saved, so every mode on
+	// this installation claims the same device. A fresh installation
+	// generates a new id and persists it BEFORE the exchange, so a lost
+	// token response cannot orphan the identity.
+	configPath, err := bridgeconfig.DefaultPath()
+	if err != nil {
+		return fmt.Errorf("locate configuration: %w", err)
+	}
+	saved, err := bridgeconfig.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w (delete %s to restart setup)", err, configPath)
+	}
+	deviceID := saved.DeviceID
+	if deviceID == "" {
+		deviceID = newEnrollDeviceID()
+	}
+	if saved.GatewayURL == "" || saved.DeviceID == "" || saved.MCPLauncher == "" {
+		saved = bridgeconfig.Config{
+			Version:     bridgeconfig.CurrentVersion,
+			GatewayURL:  saved.GatewayURL,
+			DeviceID:    deviceID,
+			MCPLauncher: saved.MCPLauncher,
+		}
+		if err := bridgeconfig.Save(configPath, saved); err != nil {
+			return fmt.Errorf("save configuration: %w", err)
+		}
+	}
 	return bridgeapp.RunEnroll(ctx, bridgeapp.EnrollConfig{
 		APIBaseURL:    origin,
-		DeviceID:      newEnrollDeviceID(),
+		DeviceID:      deviceID,
 		DeviceName:    hostname() + " (RobloxBridge)",
 		Hostname:      hostname(),
 		Platform:      runtime.GOOS,

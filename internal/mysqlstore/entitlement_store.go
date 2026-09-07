@@ -75,7 +75,11 @@ func auditCorrelation(preferred string) (string, error) {
 
 // BindFirstDevice starts the one-time trial and registers the first device and
 // its credential atomically: trial, historical identity binding, device,
-// credential, and audit event commit or roll back as one unit.
+// credential, and audit event commit or roll back as one unit. When the user
+// already holds a trial, the call degrades into an idempotent re-claim: the
+// existing device (same owner, still active) gets its old credential revoked
+// and the freshly minted one inserted; the trial window is never restarted.
+// Re-claims are refused for devices owned by another user or revoked devices.
 func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, in entitlement.FirstDeviceBinding) (entitlement.Entitlement, entitlement.Binding, error) {
 	if err := s.check(ctx); err != nil {
 		return entitlement.Entitlement{}, entitlement.Binding{}, err
@@ -85,11 +89,6 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 	}
 	if in.CredentialDigest == [32]byte{} {
 		return entitlement.Entitlement{}, entitlement.Binding{}, errors.New("mysqlstore: empty credential digest")
-	}
-	endsAt := now.Add(entitlement.TrialWindow)
-	trialID, err := identityUUID()
-	if err != nil {
-		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: generate trial id: %w", err)
 	}
 	correlation, err := auditCorrelation(in.AuditCorrelation)
 	if err != nil {
@@ -104,6 +103,91 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 
 	if err := ensureUser(ctx, tx, in.UserID); err != nil {
 		return entitlement.Entitlement{}, entitlement.Binding{}, err
+	}
+
+	// Lock the device row first: re-claim decisions and fresh binds both key
+	// on it, and serializing on the device prevents double-claim races.
+	var deviceStatus string
+	var deviceUserID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_id, status FROM devices WHERE id = ? FOR UPDATE`,
+		in.DeviceID,
+	).Scan(&deviceUserID, &deviceStatus)
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: lock device %s: %w", in.DeviceID, err)
+	}
+
+	var trialID string
+	var startedAt, endsAt time.Time
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, started_at, ends_at FROM trial_entitlements WHERE user_id = ? FOR UPDATE`,
+		in.UserID,
+	).Scan(&trialID, &startedAt, &endsAt)
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: read trial entitlement for %s: %w", in.UserID, err)
+	}
+
+	if trialID != "" {
+		// Existing trial: this is a re-claim, never a second trial.
+		if deviceUserID == "" {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device %s not registered for %s: %w", in.DeviceID, in.UserID, entitlement.ErrTrialAlreadyUsed)
+		}
+		if deviceUserID != in.UserID {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device %s: %w", in.DeviceID, entitlement.ErrDeviceOwnedByOther)
+		}
+		if deviceStatus != "active" {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device %s is %s", in.DeviceID, deviceStatus)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE device_credentials SET revoked_at = ? WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL`,
+			now, in.DeviceID, in.UserID,
+		); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: revoke old credential: %w", err)
+		}
+		credentialID, err := identityUUID()
+		if err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: generate credential id: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO device_credentials (id, user_id, device_id, credential_digest) VALUES (?, ?, ?, ?)`,
+			credentialID, in.UserID, in.DeviceID, in.CredentialDigest[:],
+		); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device credential: %w", err)
+		}
+		if err := s.recordAudit(ctx, tx, audit.Event{
+			Actor:         audit.Actor{UserID: in.UserID, Kind: audit.ActorUser},
+			Action:        "device.reclaim",
+			CorrelationID: correlation,
+			UserID:        in.UserID,
+			TargetType:    "device",
+			TargetID:      in.DeviceID,
+			After:         map[string]string{"trial_entitlement_id": trialID},
+			CreatedAt:     now,
+		}); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, err
+		}
+		if err := s.commit(tx, "device reclaim"); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, err
+		}
+		return entitlement.Entitlement{ID: trialID, UserID: in.UserID, StartedAt: startedAt, EndsAt: endsAt},
+			entitlement.Binding{UserID: in.UserID, DeviceID: in.DeviceID, Status: deviceStatus}, nil
+	}
+
+	// Fresh trial path. The user has no trial yet; the device row, when it
+	// exists, must still belong to this user (or be absent).
+	if deviceUserID != "" && deviceUserID != in.UserID {
+		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device %s: %w", in.DeviceID, entitlement.ErrDeviceOwnedByOther)
+	}
+	endsAt = now.Add(entitlement.TrialWindow)
+	trialID, err = identityUUID()
+	if err != nil {
+		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: generate trial id: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO trial_entitlements (id, user_id, started_at, ends_at) VALUES (?, ?, ?, ?)`,
@@ -127,11 +211,13 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 		}
 		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert trial identity: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`,
-		in.DeviceID, in.UserID, in.DeviceID,
-	); err != nil {
-		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device: %w", err)
+	if deviceUserID == "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`,
+			in.DeviceID, in.UserID, in.DeviceID,
+		); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device: %w", err)
+		}
 	}
 	credentialID, err := identityUUID()
 	if err != nil {

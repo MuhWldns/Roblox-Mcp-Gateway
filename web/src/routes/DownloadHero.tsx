@@ -134,7 +134,12 @@ export default function DownloadHero() {
             <Link to="/devices" className="text-red hover:text-red-hover font-medium">
               connect your device
             </Link>
-            . Connecting your PC starts your 14-day free trial.
+            . Connecting your PC starts your 14-day free trial. Or simply run
+            the{" "}
+            <strong className="text-navy">RobloxBridge</strong> app — it walks
+            you through setup, opens your browser for approval automatically,
+            and links this PC. If your browser does not open, the window shows
+            the approval URL to open manually.
           </li>
           <li>
             <strong className="text-navy">Open Roblox Studio</strong> while

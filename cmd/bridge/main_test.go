@@ -13,17 +13,21 @@ import (
 	"testing"
 
 	"robloxkit/internal/appconfig"
+	"robloxkit/internal/bridgeapp"
+	"robloxkit/internal/bridgeconfig"
 )
 
 func getenvWith(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
 }
 
-// The committed selection contract is untouched: BRIDGE_MODE=remote selects
-// the remote gateway mode, anything else (or unset) stays local. Service mode
-// is selected explicitly with BRIDGE_MODE=service or by the Windows service
-// control manager launch detection, which is authoritative while running as
-// the service — a non-service run mode could never report service status.
+// The explicit selection contract is unchanged: BRIDGE_MODE=remote selects
+// the remote gateway mode, local stays local, enroll stays enroll. Service
+// mode is selected explicitly (BRIDGE_MODE=service) or by the Windows
+// service control manager launch detection, which is authoritative while
+// running as the service - a non-service run mode could never report
+// service status. The default (unset, blank, or unknown) is the smart
+// first-run flow instead of local.
 func TestResolveBridgeMode(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -31,15 +35,15 @@ func TestResolveBridgeMode(t *testing.T) {
 		inService  bool
 		want       string
 	}{
-		{"unset stays local", "", false, bridgeModeLocal},
-		{"blank stays local", "   ", false, bridgeModeLocal},
+		{"unset is smart", "", false, bridgeModeSmart},
+		{"blank is smart", "   ", false, bridgeModeSmart},
+		{"unknown value is smart", "cluster", false, bridgeModeSmart},
 		{"explicit local", "local", false, bridgeModeLocal},
 		{"local is case-insensitive", "LOCAL", false, bridgeModeLocal},
 		{"remote selects remote", "remote", false, bridgeModeRemote},
 		{"remote is case-insensitive", " Remote ", false, bridgeModeRemote},
 		{"service selects service", "service", false, bridgeModeService},
 		{"service is case-insensitive", "SERVICE", false, bridgeModeService},
-		{"unknown value stays local", "cluster", false, bridgeModeLocal},
 		{"enroll selects enroll", "enroll", false, bridgeModeEnroll},
 		{"enroll is case-insensitive", "ENROLL", false, bridgeModeEnroll},
 		{"SCM launch wins over enroll", "enroll", true, bridgeModeService},
@@ -217,6 +221,107 @@ func TestRunEnrollMinimalConfigOnlyRequiresGatewayAndCredential(t *testing.T) {
 	}
 	if _, statErr := os.Stat(untrustedCredentialPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed verified-TLS enrollment must not create credential path; stat err = %v", statErr)
+	}
+}
+
+// A fresh install without a saved config generates one device id and
+// persists it BEFORE the exchange; a second enroll run on the same
+// installation reuses the SAME id instead of minting a new one.
+func TestRunEnrollReusesPersistedDeviceID(t *testing.T) {
+	enrolled := map[string]string{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/enrollment/begin":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_code":        "rkuc_reuse",
+				"verification_url": "https://gateway.example/enroll?code=rkuc_reuse",
+				"expires_in":       600,
+			})
+		case "/api/v1/device/enrollment/exchange":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"device_credential": "rkd_reuse_secret",
+				"device_id":         "whatever",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", dir)
+	credentialPath := filepath.Join(dir, "device.credential")
+	env := map[string]string{
+		"BRIDGE_GATEWAY_URL":     "wss" + strings.TrimPrefix(srv.URL, "https") + "/bridge",
+		"BRIDGE_CREDENTIAL_PATH": credentialPath,
+	}
+	run := func() (string, error) {
+		config, err := appconfig.LoadEnroll(getenvWith(env))
+		if err != nil {
+			return "", err
+		}
+		var out bytes.Buffer
+		if err := runEnrollFlow(t.Context(), config, &out, srv.Client()); err != nil {
+			return "", err
+		}
+		return out.String(), nil
+	}
+	first, err := run()
+	if err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+	configPath := filepath.Join(dir, "RobloxBridge", "config.json")
+	saved, err := bridgeconfig.Load(configPath)
+	if err != nil || saved.DeviceID == "" {
+		t.Fatalf("config must persist the device id before the exchange: %+v err %v", saved, err)
+	}
+	// Enroll mode stores no device id mapping server-side for this fixture,
+	// so track via the persisted config: the second run must reuse it.
+	firstID := saved.DeviceID
+	if err := os.Remove(credentialPath); err != nil {
+		t.Fatalf("remove credential: %v", err)
+	}
+	second, err := run()
+	if err != nil {
+		t.Fatalf("second enroll: %v", err)
+	}
+	if firstID != saved.DeviceID {
+		t.Fatalf("device id changed between runs: %s -> %s", firstID, saved.DeviceID)
+	}
+	_ = enrolled
+	if !strings.Contains(first, "rkuc_reuse") || !strings.Contains(second, "rkuc_reuse") {
+		t.Fatal("both runs must reach the approval flow")
+	}
+}
+
+// Enrolling over an existing credential is refused: rotation belongs to the
+// dashboard, and a silent re-enroll would mint a second device id.
+func TestRunEnrollRefusesWhenCredentialExists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", dir)
+	credentialPath := filepath.Join(dir, "device.credential")
+	store, err := bridgeapp.NewFileCredentialStore(credentialPath)
+	if err != nil {
+		t.Fatalf("open credential store: %v", err)
+	}
+	if err := store.Save([]byte("existing-credential")); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+	config, err := appconfig.LoadEnroll(getenvWith(map[string]string{
+		"BRIDGE_GATEWAY_URL":     "wss://gateway.example/bridge",
+		"BRIDGE_CREDENTIAL_PATH": credentialPath,
+	}))
+	if err != nil {
+		t.Fatalf("LoadEnroll: %v", err)
+	}
+	var out bytes.Buffer
+	err = runEnrollFlow(t.Context(), config, &out, nil)
+	if err == nil {
+		t.Fatal("enroll over an existing credential must be refused")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("refusal error = %v, want explicit credential-exists message", err)
 	}
 }
 

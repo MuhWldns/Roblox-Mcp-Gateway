@@ -54,6 +54,12 @@ type EnrollConfig struct {
 	// PollInterval bounds the pending-exchange polling; zero selects the
 	// default.
 	PollInterval time.Duration
+	// OnVerificationURL, when non-nil, is called exactly once with the
+	// approval URL immediately after it is printed. The first-run wizard
+	// uses it to open the browser automatically; every other caller leaves
+	// it nil. The hook must not block: exchange polling continues right
+	// after the call.
+	OnVerificationURL func(url string)
 }
 
 // RunEnroll performs the device enrollment flow:
@@ -109,6 +115,9 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 	}
 	fmt.Fprintf(cfg.Output, "Open the verification URL in your browser and approve this device:\n%s\n", begin.VerificationURL)
 	fmt.Fprintf(cfg.Output, "Enrollment user code: %s\n", begin.UserCode)
+	if cfg.OnVerificationURL != nil {
+		cfg.OnVerificationURL(begin.VerificationURL)
+	}
 
 	exchangePayload, err := json.Marshal(map[string]string{"device_code": begin.UserCode})
 	if err != nil {

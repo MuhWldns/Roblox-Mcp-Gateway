@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "2d74c9c1ec0151be838a6b1bbb2f764371801cd0",
-    "indexed_at": "2026-09-04T19:20:58Z",
+    "commit": "0eb414f8b3ff176a1a0bb02c975ee0f72f0e3de8",
+    "indexed_at": "2026-09-06T14:11:16Z",
     "project": "RobloxKit-remote-mcp-gateway",
-    "nodes": 3123,
-    "edges": 16115,
-    "original_size": 11468800,
-    "compressed_size": 2307247,
+    "nodes": 3259,
+    "edges": 16485,
+    "original_size": 11665408,
+    "compressed_size": 2375889,
     "compression_level": 9
 }

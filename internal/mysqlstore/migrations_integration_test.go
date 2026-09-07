@@ -83,8 +83,8 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 5 {
-		t.Fatalf("migration version = %d, want 5", version)
+	if version != 6 {
+		t.Fatalf("migration version = %d, want 6", version)
 	}
 	assertBinaryDigest(t, db, "web_sessions", "token_digest")
 	assertNoPlaintextTokenColumns(t, db)

@@ -22,6 +22,9 @@ var (
 	// ErrInvalidExtension indicates a trial extension is not later than the
 	// current expiry.
 	ErrInvalidExtension = errors.New("entitlement: extension must be later than current expiry")
+	// ErrDeviceOwnedByOther indicates the device id is claimed by another
+	// internal account; a re-claim by the wrong owner is rejected.
+	ErrDeviceOwnedByOther = errors.New("entitlement: device owned by another user")
 )
 
 // Clock supplies deterministically controlled time for policy evaluation.
