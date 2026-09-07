@@ -68,6 +68,9 @@ var (
 	ErrGrantNotFound = errors.New("mcpoauth: grant not found")
 	// ErrGrantRevoked reports an access token presented under a revoked grant.
 	ErrGrantRevoked = errors.New("mcpoauth: grant revoked")
+	// ErrSessionConsentNotFound reports that the active browser session has
+	// no remembered approval for the resolved internal OAuth client.
+	ErrSessionConsentNotFound = errors.New("mcpoauth: session consent not found")
 
 	// ErrTokenNotFound reports an unknown token digest.
 	ErrTokenNotFound = errors.New("mcpoauth: token not found")
@@ -130,6 +133,19 @@ type Grant struct {
 	Resource        string
 	RevokedAt       *time.Time
 	CreatedAt       time.Time
+}
+
+// SessionConsent remembers the last explicit approval for one OAuth client
+// inside one browser session. RequestedScopes is the canonical request scope
+// set; GrantID identifies the exact durable target binding that was approved.
+type SessionConsent struct {
+	WebSessionID    string
+	ClientID        string
+	GrantID         string
+	RequestedScopes []string
+	Resource        string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // AccessToken references one hashed opaque bearer token issued under a grant.

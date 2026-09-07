@@ -204,6 +204,8 @@ func newMcpFixture(t *testing.T, mutate func(*mcpFixtureSpec)) *mcpFixture {
 		}
 	}
 	exec(`INSERT INTO users (id) VALUES (?)`, fx.userID)
+	exec(`INSERT INTO user_identities (id, user_id, provider, provider_subject, display_name, status) VALUES (?, ?, 'roblox', ?, ?, 'active')`,
+		mcpUUID(t), fx.userID, "subject-primary", "Builder One")
 	exec(`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`, fx.deviceID, fx.userID, "Primary Workstation")
 	exec(`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`, fx.secondDevID, fx.userID, "Secondary Workstation")
 	exec(`INSERT INTO studio_sessions (id, user_id, device_id, studio_id, status, started_at) VALUES (?, ?, ?, ?, 'active', ?)`,
@@ -211,6 +213,8 @@ func newMcpFixture(t *testing.T, mutate func(*mcpFixtureSpec)) *mcpFixture {
 	exec(`INSERT INTO studio_sessions (id, user_id, device_id, studio_id, status, started_at) VALUES (?, ?, ?, ?, 'active', ?)`,
 		fx.otherStudioID, fx.userID, fx.secondDevID, "studio-secondary", mcpTestNow())
 	exec(`INSERT INTO users (id) VALUES (?)`, fx.secondUserID)
+	exec(`INSERT INTO user_identities (id, user_id, provider, provider_subject, display_name, status) VALUES (?, ?, 'roblox', ?, ?, 'active')`,
+		mcpUUID(t), fx.secondUserID, "subject-secondary", "Builder Two")
 	exec(`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`, fx.otherUserDevID, fx.secondUserID, "Foreign Workstation")
 	exec(`INSERT INTO studio_sessions (id, user_id, device_id, studio_id, status, started_at) VALUES (?, ?, ?, ?, 'active', ?)`,
 		fx.otherUserStuID, fx.secondUserID, fx.otherUserDevID, "studio-foreign", mcpTestNow())
@@ -235,6 +239,7 @@ func newMcpFixture(t *testing.T, mutate func(*mcpFixtureSpec)) *mcpFixture {
 		Audits:       auditService,
 		Entitlements: entitlement.NewService(mysqlstore.NewEntitlementStore(db, clock, auditService), clock),
 		Sessions:     fx.sessions,
+		Identities:   mysqlstore.NewDeviceStore(db),
 		Pepper:       mcpTestPepper,
 		LoginPath:    mcpTestLogin,
 	})
@@ -352,8 +357,8 @@ func (fx *mcpFixture) approveConsent(t *testing.T, q url.Values, mutate func(*ur
 	form := consentForm(q)
 	form.Set("action", "approve")
 	form.Set("device_id", fx.deviceID)
+	form.Set("studio_session_id", fx.studioID)
 	form.Set("csrf_token", csrf)
-	form["grant"] = []string{"mcp:connect"}
 	if mutate != nil {
 		mutate(&form)
 	}
@@ -534,6 +539,7 @@ func TestProviderRejectsIncompleteConfig(t *testing.T) {
 		Audits:       audit.NewService(mysqlstore.NewAuditStore(db)),
 		Entitlements: activeEntitlements{},
 		Sessions:     session.NewService(mysqlstore.NewSessionStore(db), mcpTestPepper, time.Hour),
+		Identities:   mysqlstore.NewDeviceStore(db),
 		Pepper:       mcpTestPepper,
 		LoginPath:    mcpTestLogin,
 	}
@@ -543,6 +549,7 @@ func TestProviderRejectsIncompleteConfig(t *testing.T) {
 		"missing database":     func(cfg *mcpoauth.Config) { cfg.DB = nil },
 		"missing audit":        func(cfg *mcpoauth.Config) { cfg.Audits = nil },
 		"missing sessions":     func(cfg *mcpoauth.Config) { cfg.Sessions = nil },
+		"missing identities":   func(cfg *mcpoauth.Config) { cfg.Identities = nil },
 		"missing entitlements": func(cfg *mcpoauth.Config) { cfg.Entitlements = nil },
 		"missing pepper":       func(cfg *mcpoauth.Config) { cfg.Pepper = nil },
 		"missing login path":   func(cfg *mcpoauth.Config) { cfg.LoginPath = "" },
@@ -779,7 +786,7 @@ func TestAuthorizeConsentIssuesCodeAndState(t *testing.T) {
 	if err := json.Unmarshal(rawScopes, &scopes); err != nil {
 		t.Fatalf("decode code scopes: %v", err)
 	}
-	assertScopeSet(t, strings.Join(scopes, " "), "mcp:connect studio:read")
+	assertScopeSet(t, strings.Join(scopes, " "), "mcp:connect studio:read studio:edit")
 
 	// The audit event carries identifiers only — never code or verifier.
 	var metadata []byte
@@ -795,9 +802,9 @@ func TestAuthorizeConsentIssuesCodeAndState(t *testing.T) {
 
 func TestTokenExchangesCodeForTokens(t *testing.T) {
 	fx := newMcpFixture(t, nil)
-	code, _ := fx.consentCode(t, fx.authorizeQuery(nil), func(f *url.Values) {
-		(*f)["grant"] = []string{"mcp:connect", "studio:read"}
-	})
+	code, _ := fx.consentCode(t, fx.authorizeQuery(func(v url.Values) {
+		v.Set("scope", "mcp:connect studio:read")
+	}), nil)
 
 	status, tokens, errResp := fx.exchangeToken(t, code, nil)
 	if status != http.StatusOK {
@@ -926,9 +933,9 @@ func TestTokenRejectsCodeReuse(t *testing.T) {
 
 func TestTokenRefreshRotatesTokens(t *testing.T) {
 	fx := newMcpFixture(t, nil)
-	code, _ := fx.consentCode(t, fx.authorizeQuery(nil), func(f *url.Values) {
-		(*f)["grant"] = []string{"mcp:connect", "studio:read"}
-	})
+	code, _ := fx.consentCode(t, fx.authorizeQuery(func(v url.Values) {
+		v.Set("scope", "mcp:connect studio:read")
+	}), nil)
 	_, first, _ := fx.exchangeToken(t, code, nil)
 
 	status, second, errResp := fx.refreshToken(t, first.RefreshToken, nil)

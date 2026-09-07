@@ -13,8 +13,8 @@ import (
 const loginBindingCookieName = "__Host-robloxkit_login"
 
 type FlowService interface {
-	Begin(context.Context) (AuthorizeURL, LoginTransaction, error)
-	Complete(context.Context, Callback) (RobloxIdentity, error)
+	Begin(context.Context, string) (AuthorizeURL, LoginTransaction, error)
+	Complete(context.Context, Callback) (RobloxIdentity, string, error)
 }
 
 type IdentityService interface {
@@ -47,7 +47,7 @@ func (h *Handler) Begin(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, "login unavailable")
 		return
 	}
-	authorize, transaction, err := h.Flow.Begin(r.Context())
+	authorize, transaction, err := h.Flow.Begin(r.Context(), r.URL.Query().Get("next"))
 	if err != nil {
 		h.internalError(w, "begin login failed")
 		return
@@ -73,7 +73,7 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, loginBindingCookie("", -1))
 	query := r.URL.Query()
-	identity, err := h.Flow.Complete(r.Context(), Callback{Code: query.Get("code"), State: query.Get("state"), Binding: binding.Value, Error: query.Get("error")})
+	identity, returnTo, err := h.Flow.Complete(r.Context(), Callback{Code: query.Get("code"), State: query.Get("state"), Binding: binding.Value, Error: query.Get("error")})
 	if err != nil {
 		h.badCallback(w, callbackFailureCategory(err))
 		return
@@ -93,6 +93,10 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		maxAge = int(h.SessionMaxAge / time.Second)
 	}
 	http.SetCookie(w, session.Cookie(plain, maxAge))
+	if returnTo != "" {
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	redirect := h.SuccessRedirect
 	if redirect == "" {
 		redirect = "/"

@@ -674,6 +674,7 @@ func (st *liveStack) compose() {
 		Audits:       st.auditSvc,
 		Entitlements: st.entitlement,
 		Sessions:     st.sessions,
+		Identities:   deviceStore,
 		Pepper:       st.oauthPepper,
 		LoginPath:    "/login",
 	})
@@ -1432,4 +1433,142 @@ func (st *liveStack) awaitAudit(action, actorUserID string, timeout time.Duratio
 		time.Sleep(50 * time.Millisecond)
 	}
 	return 0
+}
+
+func TestChatGPTDynamicRegistrationAndMCPOAuthFlow(t *testing.T) {
+	st := newLiveStack(t)
+	st.awaitServing()
+
+	// 1. DCR: register public ChatGPT connector without pre-seeding client rows.
+	dcrPayload := map[string]any{
+		"client_name":                  "ChatGPT",
+		"redirect_uris":                []string{"https://chatgpt.com/aip/g-12345/oauth/callback"},
+		"token_endpoint_auth_method":   "none",
+		"grant_types":                  []string{"authorization_code", "refresh_token"},
+		"response_types":               []string{"code"},
+	}
+	status, dcrResp := st.newClient().postJSON(st.base+"/oauth/register", dcrPayload)
+	if status != http.StatusCreated {
+		t.Fatalf("DCR status = %d: %v", status, dcrResp)
+	}
+	clientID, _ := dcrResp["client_id"].(string)
+	if clientID == "" {
+		t.Fatalf("DCR returned empty client_id: %v", dcrResp)
+	}
+
+	// 2. Setup user, active device, and active studio session.
+	session := st.login("chatgpt-user-subject")
+	userID := st.userIDBySubject("chatgpt-user-subject")
+	claim := device.DeviceClaim{
+		DeviceID:      gateUUID(t),
+		Name:          "Dev Workstation",
+		Hostname:      "E2EGATE-Workstation",
+		Platform:      "windows",
+		BridgeVersion: "e2egate",
+	}
+	cred, devID := st.enroll(session, claim)
+	st.seedStudio(devID, userID, "Studio Session 1")
+	studioSessionID := st.studioSessionID(devID, "Studio Session 1")
+	bridge := st.startBridge(cred, devID, "Dev Workstation", 1)
+	bridge.awaitConnected(5 * time.Second)
+	defer bridge.cancel()
+
+	// 3. Unauthenticated GET /oauth/authorize redirects to /login?next=...
+	verifier := "chatgpt-pkce-verifier-12345678901234567890-43-chars-min"
+	challenge := base64Raw(sha256Sum([]byte(verifier)))
+	authParams := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://chatgpt.com/aip/g-12345/oauth/callback"},
+		"scope":                 {strings.Join(mcpoauth.SupportedScopes, " ")},
+		"state":                 {"chatgpt-state-999"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"resource":              {st.base + "/mcp"},
+	}
+	unauthClient := st.newClient()
+	resp := unauthClient.do(http.MethodGet, st.base+"/oauth/authorize?"+authParams.Encode(), nil, nil)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("unauth authorize status = %d, want 303", resp.StatusCode)
+	}
+	loc, _ := resp.Location()
+	if !strings.HasPrefix(loc.Path, "/login") {
+		t.Fatalf("unauth authorize location = %q, want /login", loc.String())
+	}
+
+	// 4. Authenticated GET /oauth/authorize -> consent page
+	resp = session.do(http.MethodGet, st.base+"/oauth/authorize?"+authParams.Encode(), nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth authorize status = %d, want 200", resp.StatusCode)
+	}
+	csrfToken, consentCookie := mcpConsentCSRF(t, string(st.readBody(resp)), resp)
+
+	// 5. POST consent approval -> 303 redirect with code
+	consentForm := url.Values{}
+	for k, v := range authParams {
+		consentForm[k] = append([]string(nil), v...)
+	}
+	consentForm.Set("action", "approve")
+	consentForm.Set("device_id", devID)
+	consentForm.Set("studio_session_id", studioSessionID)
+	consentForm.Set("csrf_token", csrfToken)
+	resp = session.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(consentForm.Encode()),
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("consent approve status = %d", resp.StatusCode)
+	}
+	loc, _ = resp.Location()
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatalf("consent redirect carried no code: %s", loc.String())
+	}
+	if loc.Query().Get("state") != "chatgpt-state-999" {
+		t.Fatalf("state mismatch: got %q", loc.Query().Get("state"))
+	}
+
+	// 6. Token exchange
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://chatgpt.com/aip/g-12345/oauth/callback"},
+		"client_id":     {clientID},
+		"code_verifier": {verifier},
+		"resource":      {st.base + "/mcp"},
+	}
+	resp = st.newClient().do(http.MethodPost, st.base+"/oauth/token", strings.NewReader(tokenForm.Encode()),
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token exchange status = %d (body %s)", resp.StatusCode, st.readBody(resp))
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(st.readBody(resp), &tokenResp)
+	if tokenResp.AccessToken == "" {
+		t.Fatal("empty access token in token exchange")
+	}
+
+	// 7. MCP Streamable HTTP session: initialize + tools/list + relayed tool call
+	authorizer := &connectorAuthorizer{
+		t:        t,
+		stack:    st,
+		token:    tokenResp.AccessToken,
+		clientID: clientID,
+		redirect: "https://chatgpt.com/aip/g-12345/oauth/callback",
+	}
+	authorizer.openMCPSession()
+
+	// Call tools/list
+	rawList, _, err := authorizer.call("tools/list", "{}")
+	if err != nil {
+		t.Fatalf("tools/list error: %v", err)
+	}
+	if len(rawList) == 0 {
+		t.Fatal("tools/list returned empty result")
+	}
+
+	text := authorizer.callText("tools/call", `{"name":"get_instance_tree","arguments":{"text":"workspace"}}`)
+	if text == "" {
+		t.Fatal("tools/call returned empty output")
+	}
 }

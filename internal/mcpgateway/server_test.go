@@ -887,6 +887,9 @@ func TestBearerMissingIsRejectedWithChallenge(t *testing.T) {
 	if !strings.Contains(challenge, "/.well-known/oauth-protected-resource/mcp") {
 		t.Fatalf("WWW-Authenticate = %q, want the RFC 9728 well-known path", challenge)
 	}
+	if !strings.Contains(challenge, `scope="mcp:connect studio:read studio:edit studio:execute studio:playtest studio:asset studio:input"`) {
+		t.Fatalf("WWW-Authenticate = %q, want full supported scope package", challenge)
+	}
 	fx.requireAuditReason(t, auditActionDenied, auditReasonMissingBearer)
 }
 
@@ -896,8 +899,12 @@ func TestBearerInvalidIsRejectedWithChallenge(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status with unknown token = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
-	if !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Bearer") {
-		t.Fatalf("WWW-Authenticate = %q, want a Bearer challenge", resp.Header.Get("WWW-Authenticate"))
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if !strings.HasPrefix(challenge, "Bearer") {
+		t.Fatalf("WWW-Authenticate = %q, want a Bearer challenge", challenge)
+	}
+	if !strings.Contains(challenge, `scope="mcp:connect studio:read studio:edit studio:execute studio:playtest studio:asset studio:input"`) {
+		t.Fatalf("WWW-Authenticate = %q, want full supported scope package on invalid token challenge", challenge)
 	}
 	fx.requireAuditReason(t, auditActionDenied, auditReasonInvalidToken)
 }

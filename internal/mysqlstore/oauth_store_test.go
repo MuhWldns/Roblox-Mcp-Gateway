@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -164,6 +165,64 @@ func oauthNewTokenPair(t *testing.T, grant mcpoauth.Grant, now time.Time) (mcpoa
 		CreatedAt: now,
 	}
 	return access, accessDigest, refresh, refreshDigest
+}
+
+func TestOAuthStoreSessionConsentRoundTrip(t *testing.T) {
+	f := oauthTestFixture(t)
+	ctx := t.Context()
+	grant := f.grant(t, f.deviceID)
+	grant.StudioSessionID = f.studioID
+	storedGrant, err := f.store.SaveGrant(ctx, grant)
+	if err != nil {
+		t.Fatalf("save grant: %v", err)
+	}
+	webSessionID := oauthUUID(t)
+	var sessionDigest [32]byte
+	sessionDigest[0] = 1
+	if _, err := f.db.ExecContext(ctx,
+		`INSERT INTO web_sessions (id, user_id, token_digest, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
+		webSessionID, f.userID, sessionDigest[:], f.now.Add(time.Hour), f.now); err != nil {
+		t.Fatalf("insert web session: %v", err)
+	}
+	wantScopes := []string{mcpoauth.ScopeConnect, mcpoauth.ScopeStudioRead}
+	rawScopes, err := oauthJSONStrings(wantScopes)
+	if err != nil {
+		t.Fatalf("encode scopes: %v", err)
+	}
+	createdAt := f.now.Add(-time.Minute)
+	updatedAt := f.now
+	if _, err := f.db.ExecContext(ctx,
+		`INSERT INTO oauth_session_consents (web_session_id, client_id, grant_id, requested_scopes, resource, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		webSessionID, f.client.ID, storedGrant.ID, rawScopes, oauthTestResource, createdAt, updatedAt); err != nil {
+		t.Fatalf("insert session consent: %v", err)
+	}
+
+	got, err := f.store.SessionConsent(ctx, webSessionID, f.client.ID)
+	if err != nil {
+		t.Fatalf("lookup session consent: %v", err)
+	}
+	if got.WebSessionID != webSessionID || got.ClientID != f.client.ID || got.GrantID != storedGrant.ID || got.Resource != oauthTestResource {
+		t.Fatalf("session consent identity = %#v", got)
+	}
+	if !equalStrings(got.RequestedScopes, wantScopes) {
+		t.Fatalf("session consent scopes = %#v, want %#v", got.RequestedScopes, wantScopes)
+	}
+	if !got.CreatedAt.Equal(createdAt) || !got.UpdatedAt.Equal(updatedAt) || got.CreatedAt.Location() != time.UTC || got.UpdatedAt.Location() != time.UTC {
+		t.Fatalf("session consent timestamps = %v/%v", got.CreatedAt, got.UpdatedAt)
+	}
+
+	if _, err := f.store.SessionConsent(ctx, oauthUUID(t), f.client.ID); !errors.Is(err, mcpoauth.ErrSessionConsentNotFound) {
+		t.Fatalf("missing session consent error = %v", err)
+	}
+}
+
+func TestOAuthStoreSessionConsentRejectsEmptyIdentifiersBeforeSQL(t *testing.T) {
+	store := NewOAuthStore(nil)
+	for _, ids := range [][2]string{{"", "client-id"}, {"session-id", ""}} {
+		if _, err := store.SessionConsent(t.Context(), ids[0], ids[1]); err == nil || strings.Contains(err.Error(), "nil database") {
+			t.Fatalf("SessionConsent(%q, %q) error = %v", ids[0], ids[1], err)
+		}
+	}
 }
 
 func TestOAuthStoreClientRegistrationRoundTrip(t *testing.T) {

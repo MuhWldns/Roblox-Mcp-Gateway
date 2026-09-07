@@ -1,8 +1,40 @@
-import { useEffect, useState } from "react";
-import { Link, Navigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, Navigate, useLocation } from "react-router";
 import { getMe } from "../api/client";
 
+const maxReturnToLength = 4096;
+
+function oauthAuthorizeContinuation(search: string): string {
+  const candidate = new URLSearchParams(search).get("next") ?? "";
+  if (
+    candidate.length === 0 ||
+    candidate.length > maxReturnToLength ||
+    !candidate.startsWith("/") ||
+    candidate.startsWith("//") ||
+    candidate.includes("#")
+  ) {
+    return "";
+  }
+  try {
+    const target = new URL(candidate, window.location.origin);
+    if (
+      target.origin !== window.location.origin ||
+      target.username !== "" ||
+      target.password !== "" ||
+      target.pathname !== "/oauth/authorize"
+    ) {
+      return "";
+    }
+  } catch {
+    return "";
+  }
+  return candidate;
+}
+
 export default function Login() {
+  const location = useLocation();
+  const returnTo = oauthAuthorizeContinuation(location.search);
+  const resumeLink = useRef<HTMLAnchorElement>(null);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -19,8 +51,17 @@ export default function Login() {
     };
   }, []);
 
+  useEffect(() => {
+    if (authenticated === true && returnTo !== "") {
+      resumeLink.current?.click();
+    }
+  }, [authenticated, returnTo]);
+
   if (authenticated === true) {
-    return <Navigate to="/download" replace />;
+    if (returnTo === "") {
+      return <Navigate to="/download" replace />;
+    }
+    return <a ref={resumeLink} href={returnTo} hidden aria-hidden="true" />;
   }
   if (authenticated === null) {
     return (
@@ -55,13 +96,16 @@ export default function Login() {
             </li>
           ))}
         </ol>
-        <button
-          type="button"
-          onClick={() => window.location.assign("/api/v1/auth/roblox/login")}
-          className="w-full px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors min-h-[44px]"
+        <a
+          href={
+            returnTo === ""
+              ? "/api/v1/auth/roblox/login"
+              : `/api/v1/auth/roblox/login?${new URLSearchParams({ next: returnTo })}`
+          }
+          className="w-full px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors min-h-[44px] inline-flex items-center justify-center no-underline"
         >
           Continue with Roblox
-        </button>
+        </a>
         <nav aria-label="Legal" className="flex justify-center gap-5 mt-6 text-xs text-text-secondary">
           <Link to="/privacy" className="hover:text-red underline underline-offset-4">Privacy Policy</Link>
           <Link to="/terms" className="hover:text-red underline underline-offset-4">Terms of Service</Link>

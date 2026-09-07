@@ -222,6 +222,7 @@ func main() {
 		Audits:       auditService,
 		Entitlements: entitlements,
 		Sessions:     sessions,
+		Identities:   deviceStore,
 		Pepper:       pepper,
 		LoginPath:    "/login",
 	})
