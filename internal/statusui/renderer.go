@@ -50,7 +50,7 @@ func renderConnected(w io.Writer, event Event) error {
 		studio = "1 session connected"
 	}
 
-	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nPress Ctrl+C to stop.\n", sanitizeTerminalField(event.DeviceName), studio)
+	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nBridge is running. Keep this window open while using AI assistants.\nPress Ctrl+C to stop.\n", sanitizeTerminalField(event.DeviceName), studio)
 	return err
 }
 

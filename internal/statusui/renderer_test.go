@@ -26,6 +26,7 @@ func TestRendererPrintsCompleteConnectedStatusWithoutDependingOnANSI(t *testing.
 		"MCP    : Running",
 		"Studio : 1 session connected",
 		"Press Ctrl+C to stop.",
+		"Bridge is running. Keep this window open while using AI assistants.",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain connected output missing %q\noutput:\n%s", want, plain)
