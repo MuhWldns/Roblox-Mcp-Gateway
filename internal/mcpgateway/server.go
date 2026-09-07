@@ -275,19 +275,28 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 	}
 	impl := g.cfg.Implementation
 	server := mcp.NewServer(&impl, &mcp.ServerOptions{
-		// The relayed tool catalog is dynamic; the gateway advertises the
-		// tools capability without change notifications.
-		HasTools:     true,
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}},
 		InitializedHandler: func(_ context.Context, req *mcp.InitializedRequest) {
 			go func() {
-				// Session teardown retires the session's in-flight
-				// correlations.
 				_ = req.Session.Wait()
 				g.relay.CancelSession(req.Session.ID())
 			}()
 		},
 	})
+	// Register well-known placeholder tools so ChatGPT immediately discovers
+	// valid tool declarations during initialize/tools/list even before relay.
+	// When called, sessionMiddleware intercepts and relays dynamically to Bridge.
+	for toolName := range officialToolScopes {
+		name := toolName
+		server.AddTool(&mcp.Tool{
+			Name:        name,
+			Description: "Roblox Studio MCP tool: " + name,
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Handled dynamically by sessionMiddleware
+			return nil, nil
+		})
+	}
 	server.AddReceivingMiddleware(g.sessionMiddleware(digest))
 	return server
 }
