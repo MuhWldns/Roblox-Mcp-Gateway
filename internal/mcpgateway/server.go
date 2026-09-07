@@ -20,6 +20,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
 	"robloxkit/internal/audit"
 	"robloxkit/internal/bridgehub"
@@ -283,22 +284,47 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}()
 		},
 	})
-	for toolName := range officialToolScopes {
+	for toolName, requiredScope := range officialToolScopes {
 		name := toolName
+		scope := requiredScope
 		server.AddTool(&mcp.Tool{
 			Name:        name,
 			Description: "Roblox Studio MCP tool: " + name,
 			InputSchema: map[string]any{
 				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{"type": "string"},
-					"path": map[string]any{"type": "string"},
-					"text": map[string]any{"type": "string"},
-					"code": map[string]any{"type": "string"},
-				},
 			},
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return nil, nil
+			principal, err := g.reauthorize(ctx, digest)
+			if err != nil {
+				return nil, sessionDeniedError()
+			}
+			if !scopeAllowed(principal.Grant.Scopes, scope) && !scopeAllowed(principal.Grant.Scopes, mcpoauth.ScopeConnect) {
+				return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
+			}
+			paramsRaw, _ := json.Marshal(map[string]any{
+				"name":      req.Params.Name,
+				"arguments": req.Params.Arguments,
+			})
+			response, trace, err := g.relay.CallDetailed(ctx, sessionIDOf(req), principal.Grant,
+				methodCallTool, paramsRaw)
+			if err != nil {
+				return nil, relayError(err)
+			}
+			result, wireErr := parseRelayResponse(response)
+			outcome := "success"
+			if wireErr != nil {
+				outcome = "error"
+			}
+			g.recordToolUsage(trace, principal.Grant, outcome)
+			if wireErr != nil {
+				return nil, wireErr
+			}
+			var callResult mcp.CallToolResult
+			if err := json.Unmarshal(result, &callResult); err != nil {
+				return nil, sanitizedInternalError()
+			}
+			g.recordToolSuccess(ctx, trace, principal.Grant, req.Params.Name)
+			return &callResult, nil
 		})
 	}
 	server.AddReceivingMiddleware(g.sessionMiddleware(digest))
