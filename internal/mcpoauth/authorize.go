@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ory/fosite"
@@ -323,9 +324,9 @@ func (p *Provider) renderConsent(w http.ResponseWriter, r *http.Request, ar fosi
 	}
 	view := consentView{
 		Action: AuthorizePath, ClientName: client.ClientName, ClientID: client.ClientID,
-		DisplayName: displayName, Redirect: form.Get("redirect_uri"), Resource: form.Get("resource"),
-		Capabilities: capabilities, Scope: form.Get("scope"), State: form.Get("state"),
-		CodeChallenge: form.Get("code_challenge"), CodeChallengeMethod: form.Get("code_challenge_method"),
+		DisplayName: displayName, Redirect: ar.GetRedirectURI().String(), Resource: form.Get("resource"),
+		Capabilities: capabilities, Scope: strings.Join(ar.GetRequestedScopes(), " "), State: ar.GetRequestForm().Get("state"),
+		CodeChallenge: ar.GetRequestForm().Get("code_challenge"), CodeChallengeMethod: ar.GetRequestForm().Get("code_challenge_method"),
 		Devices: devices, Studios: studios, HasTarget: hasTarget, CSRFToken: csrfToken,
 		ScriptNonce: scriptNonce,
 	}
@@ -386,12 +387,16 @@ func writeProviderError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
+	desc := rfc.HintField
+	if desc == "" {
+		desc = rfc.DescriptionField
+	}
 	payload := struct {
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
 	}{
 		Error:       rfc.ErrorField,
-		Description: rfc.DescriptionField,
+		Description: desc,
 	}
 	_ = json.NewEncoder(w).Encode(payload)
 }
