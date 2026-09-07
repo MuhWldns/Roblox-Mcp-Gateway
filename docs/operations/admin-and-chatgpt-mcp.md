@@ -32,7 +32,9 @@ group rank. The server reads a comma-separated allowlist from
 
 Each entry must be the RobloxKit internal `user_id` returned by
 `GET /api/v1/me`. Do not use a Roblox username, display name, or Roblox numeric
-account ID. A signed-in account not present in the allowlist receives `403
+account ID — the mapping from Roblox account to internal id happens at first
+login, so the internal id only exists after that account has signed in once.
+A signed-in account not present in the allowlist receives `403
 administrator access required` from every admin preview and mutation endpoint.
 The `/admin` page itself remains visible so it can render this explicit access
 denial.
