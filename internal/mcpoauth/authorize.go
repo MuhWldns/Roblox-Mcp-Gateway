@@ -420,15 +420,14 @@ func newCSRFToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// consentCSRFCookie builds the hardened CSRF cookie for the consent form.
 func consentCSRFCookie(token string) *http.Cookie {
 	return &http.Cookie{
 		Name:     consentCSRFCookieName,
 		Value:    token,
-		Path:     AuthorizePath,
+		Path:     "/",
 		Secure:   true,
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(consentCSRFMaxAge / time.Second),
 	}
 }

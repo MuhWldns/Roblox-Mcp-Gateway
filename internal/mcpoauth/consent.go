@@ -45,12 +45,16 @@ type consentApproval struct {
 // back, so no partial approval and no orphan code can survive.
 func (p *Provider) handleConsentDecision(w http.ResponseWriter, r *http.Request, ar fosite.AuthorizeRequester, webSession session.Session) {
 	ctx := r.Context()
+	if err := r.ParseForm(); err != nil {
+		writeProviderError(w, http.StatusBadRequest, fosite.ErrInvalidRequest.
+			WithHint("Unable to parse the consent form."))
+		return
+	}
 	if !validateConsentCSRF(r) {
 		writeProviderError(w, http.StatusForbidden, fosite.ErrInvalidRequest.
 			WithHint("The consent form CSRF token is missing or invalid."))
 		return
 	}
-
 	switch action := r.PostFormValue("action"); action {
 	case "deny":
 		p.fosite.WriteAuthorizeError(ctx, w, ar, fosite.ErrAccessDenied)
