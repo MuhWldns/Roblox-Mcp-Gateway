@@ -278,7 +278,7 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 		// The relayed tool catalog is dynamic; the gateway advertises the
 		// tools capability without change notifications.
 		HasTools:     true,
-		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: false}},
+		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}},
 		InitializedHandler: func(_ context.Context, req *mcp.InitializedRequest) {
 			go func() {
 				// Session teardown retires the session's in-flight
