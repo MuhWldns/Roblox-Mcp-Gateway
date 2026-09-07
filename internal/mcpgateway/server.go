@@ -228,6 +228,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	gateway.sdk = mcp.NewStreamableHTTPHandler(gateway.newSessionServer, &mcp.StreamableHTTPOptions{
 		SessionTimeout:      cfg.SessionTimeout,
 		MaxRequestBodyBytes: cfg.MaxRequestBytes,
+		JSONResponse:        true,
 	})
 	return gateway, nil
 }
