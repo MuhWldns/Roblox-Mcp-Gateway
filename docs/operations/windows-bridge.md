@@ -94,22 +94,30 @@ documented below:
 2. The browser opens the verification page automatically. If the opener
    fails, the window prints `If it did not open, open this URL manually:`
    followed by the URL and the user code.
-3. On success the non-secret configuration is saved to
-   `%LOCALAPPDATA%\RobloxBridge\config.json` (gateway URL, device id,
-   launcher path) and the DPAPI credential to
-   `%LOCALAPPDATA%\RobloxBridge\device.credential`. Every later run skips
-   the wizard and connects directly.
+3. The non-secret configuration (gateway URL, device id, launcher path) is
+   saved to `%LOCALAPPDATA%\RobloxBridge\config.json` **before** the
+   credential exchange completes, so a crash or lost token response can
+   never orphan the device id. The DPAPI credential lands in
+   `%LOCALAPPDATA%\RobloxBridge\device.credential` only after approval.
+   Every later run skips the wizard and connects directly.
 4. If `device.credential` is deleted but `config.json` remains, the flow
-   re-enrolls with the SAME device id; the dashboard keeps recognizing the
-   machine. Other failures (wrong launcher path, rejected enrollment) are
-   terminal and reported on the console.
+   re-enrolls with the SAME device id — the server re-claims the device:
+   the old credential is revoked and replaced atomically, the trial window
+   is never restarted, and the dashboard keeps recognizing the machine.
+   Re-claim is refused (HTTP 409) when the device id belongs to a
+   different account, and for revoked devices. Other failures (wrong
+   launcher path, rejected enrollment) are terminal and reported on the
+   console.
 
 The explicit modes remain: `BRIDGE_MODE=local`, `remote`, `enroll`,
 `service`. An unknown value or blank is now the smart flow (it used to be
 local). The service environment always sets `BRIDGE_MODE=service`, so the
 change cannot affect a properly installed service.
 
-## Enroll
+Re-running `BRIDGE_MODE=enroll` while a credential already exists is
+refused; delete the credential file first (or use the smart flow). The
+enroll mode reuses the saved device id and saves a newly generated one
+to `config.json` before the exchange.
 
 Enrollment binds the device and — on the first enrollment for the Roblox
 identity — starts the one 14-day trial on the server. Run it under the
