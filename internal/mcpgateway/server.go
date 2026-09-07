@@ -285,15 +285,13 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}()
 		},
 	})
+	type EmptyArgs struct{}
 	for toolName, requiredScope := range officialToolScopes {
 		name := toolName
 		scope := requiredScope
 		server.AddTool(&mcp.Tool{
 			Name:        name,
 			Description: "Roblox Studio MCP tool: " + name,
-			InputSchema: map[string]any{
-				"type": "object",
-			},
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			principal, err := g.reauthorize(ctx, digest)
 			if err != nil {
