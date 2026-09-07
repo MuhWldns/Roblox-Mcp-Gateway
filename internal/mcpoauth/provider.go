@@ -19,6 +19,7 @@ import (
 
 	"robloxkit/internal/audit"
 	"robloxkit/internal/credential"
+	"robloxkit/internal/device"
 	"robloxkit/internal/entitlement"
 	"robloxkit/internal/session"
 )
@@ -56,6 +57,11 @@ type Entitlements interface {
 	Authorize(ctx context.Context, subject entitlement.Subject) (entitlement.Decision, error)
 }
 
+// IdentityReader exposes only browser-safe Roblox identity metadata.
+type IdentityReader interface {
+	RobloxIdentity(ctx context.Context, userID string) (device.RobloxIdentity, error)
+}
+
 // Config wires the connector authorization server to its stores and policy
 // services. DB must reference the same database as Store: the consent flow
 // persists the grant and its audit event in one transaction on it.
@@ -78,6 +84,9 @@ type Config struct {
 
 	// Sessions validates the browser session on authorize and consent.
 	Sessions *session.Service
+
+	// Identities resolves the signed-in user's browser-visible Roblox name.
+	Identities IdentityReader
 
 	// Pepper keys every code and token digest.
 	Pepper []byte
@@ -130,6 +139,9 @@ func NewProvider(cfg Config) (*Provider, error) {
 	}
 	if cfg.Sessions == nil {
 		invalid = append(invalid, "sessions service is required")
+	}
+	if cfg.Identities == nil {
+		invalid = append(invalid, "identity reader is required")
 	}
 	if len(cfg.Pepper) == 0 {
 		invalid = append(invalid, "pepper is required")

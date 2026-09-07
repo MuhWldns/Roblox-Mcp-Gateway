@@ -358,15 +358,29 @@ func (g *Gateway) bearerPresence(next http.Handler) http.Handler {
 			writeDenied(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(&bearerChallengeWriter{ResponseWriter: w, challenge: g.challengeHeader()}, r)
 	})
+}
+
+type bearerChallengeWriter struct {
+	http.ResponseWriter
+	challenge string
+}
+
+func (w *bearerChallengeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *bearerChallengeWriter) WriteHeader(status int) {
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", w.challenge)
+	}
+	w.ResponseWriter.WriteHeader(status)
 }
 
 // challengeHeader is the RFC 9728 challenge pointing at the gateway's
 // protected-resource metadata document, matching the SDK bearer
 // middleware's format.
 func (g *Gateway) challengeHeader() string {
-	return fmt.Sprintf("Bearer resource_metadata=%q", g.metadataURL)
+	return fmt.Sprintf("Bearer resource_metadata=%q, scope=%q", g.metadataURL, strings.Join(mcpoauth.SupportedScopes, " "))
 }
 
 // admission re-checks the entitlement window on every request and enforces

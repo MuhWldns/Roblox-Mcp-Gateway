@@ -716,7 +716,7 @@ func (st *liveStack) connectorFlow(session *liveClient, clientID, redirect, devi
 		"response_type":         {"code"},
 		"client_id":             {clientID},
 		"redirect_uri":          {redirect},
-		"scope":                 {"mcp:connect studio:read studio:edit"},
+		"scope":                 {strings.Join(mcpoauth.SupportedScopes, " ")},
 		"state":                 {"state-" + gateUUID(t)},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
@@ -736,7 +736,7 @@ func (st *liveStack) connectorFlow(session *liveClient, clientID, redirect, devi
 	form.Set("device_id", deviceID)
 	form.Set("studio_session_id", studioSessionID)
 	form.Set("csrf_token", csrfToken)
-	form["grant"] = []string{"mcp:connect", "studio:read", "studio:edit"}
+		// grant list ignored by server; exact requested scope package is granted
 	resp = session.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
 		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 	if resp.StatusCode != http.StatusSeeOther {
@@ -1014,7 +1014,7 @@ func (st *liveStack) authorizeValues(clientID, redirect string) url.Values {
 		"response_type":         {"code"},
 		"client_id":             {clientID},
 		"redirect_uri":          {redirect},
-		"scope":                 {"mcp:connect"},
+		"scope":                 {strings.Join(mcpoauth.SupportedScopes, " ")},
 		"state":                 {"state-" + gateUUID(st.t)},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},

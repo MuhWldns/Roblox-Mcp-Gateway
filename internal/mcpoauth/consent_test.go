@@ -44,7 +44,7 @@ func (fx *mcpFixture) consentGrant(t *testing.T) (id, deviceID, studioID string,
 	return id, deviceID, studio.String, scopes
 }
 
-func TestConsentFormShowsScopesDevicesAndEchoesParams(t *testing.T) {
+func TestConsentFormShowsFixedPackageIdentityAndBoundTargets(t *testing.T) {
 	fx := newMcpFixture(t, nil)
 	cookie := fx.sessionCookie(t, fx.userID)
 	q := fx.authorizeQuery(func(v url.Values) { v.Set("state", "form-state-12345678") })
@@ -60,11 +60,16 @@ func TestConsentFormShowsScopesDevicesAndEchoesParams(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"Test Connector",
-		"mcp:connect",
-		"studio:read",
-		"studio:edit",
+		"Connect Roblox Studio to Test Connector?",
+		"Builder One",
+		fx.connector.ClientID,
+		"Connect Test Connector to the selected Roblox Studio session",
+		"Inspect the project, scripts, instances, and Studio state",
+		"Modify scripts and instances",
 		"Primary Workstation",
+		"Secondary Workstation",
+		`data-device-id="` + fx.deviceID + `"`,
+		`data-device-id="` + fx.secondDevID + `"`,
 		`name="state"`,
 		`value="form-state-12345678"`,
 		`name="redirect_uri"`,
@@ -77,16 +82,52 @@ func TestConsentFormShowsScopesDevicesAndEchoesParams(t *testing.T) {
 		`value="approve"`,
 		`value="deny"`,
 		`name="device_id"`,
+		`name="studio_session_id"`,
+		"Connect to Test Connector",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("consent form missing %q", want)
 		}
 	}
-
-	// The plaintext verifier is never part of the request, and the form must
-	// not leak anything beyond the authorize parameters themselves.
+	for _, forbidden := range []string{`type="checkbox"`, `name="grant"`, `value="">None</option>`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("fixed consent form contains obsolete editable control %q", forbidden)
+		}
+	}
 	if strings.Contains(body, mcpTestVerifier) {
 		t.Fatal("consent form must not reveal any verifier")
+	}
+}
+
+func TestConsentFormDisablesConnectWithoutActiveStudio(t *testing.T) {
+	fx := newMcpFixture(t, nil)
+	if _, err := fx.db.ExecContext(t.Context(), `UPDATE studio_sessions SET status = 'offline' WHERE user_id = ?`, fx.userID); err != nil {
+		t.Fatalf("deactivate Studio sessions: %v", err)
+	}
+	resp := fx.authorizeGet(t, fx.authorizeQuery(nil), fx.sessionCookie(t, fx.userID))
+	body := readAll(t, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("consent form status = %d, want 200 (body: %s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "Run RobloxBridge and open Roblox Studio") || !strings.Contains(body, `value="approve" disabled`) {
+		t.Fatalf("missing unavailable-target guidance or disabled Connect action: %s", body)
+	}
+}
+
+func TestConsentFormExcludesStudioOnInactiveDevice(t *testing.T) {
+	fx := newMcpFixture(t, nil)
+	if _, err := fx.db.ExecContext(t.Context(), `UPDATE devices SET status = 'inactive' WHERE id = ?`, fx.secondDevID); err != nil {
+		t.Fatalf("deactivate device: %v", err)
+	}
+	resp := fx.authorizeGet(t, fx.authorizeQuery(nil), fx.sessionCookie(t, fx.userID))
+	body := readAll(t, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("consent form status = %d, want 200 (body: %s)", resp.StatusCode, body)
+	}
+	if strings.Contains(body, fx.otherStudioID) || strings.Contains(body, fx.secondDevID) {
+		t.Fatalf("inactive device or its Studio leaked into target controls: %s", body)
 	}
 }
 
@@ -184,54 +225,48 @@ func TestConsentWrongDeviceOwnerDenied(t *testing.T) {
 	}
 }
 
-func TestConsentScopeNarrowing(t *testing.T) {
+func TestConsentUsesExactRequestedScopesAndIgnoresGrantFields(t *testing.T) {
 	fx := newMcpFixture(t, nil)
-	q := fx.authorizeQuery(nil) // requests mcp:connect studio:read studio:edit
+	q := fx.authorizeQuery(nil)
 
-	// Approving a subset narrows the grant, code, and echoed scope.
 	code, _ := fx.consentCode(t, q, func(f *url.Values) {
-		(*f)["grant"] = []string{"mcp:connect", "studio:read"}
+		(*f)["grant"] = []string{"studio:input", "not-supported"}
 	})
 	_, deviceID, _, scopes := fx.consentGrant(t)
 	if deviceID != fx.deviceID {
 		t.Fatalf("grant device = %q, want %q", deviceID, fx.deviceID)
 	}
-	assertScopeSet(t, strings.Join(scopes, " "), "mcp:connect studio:read")
+	assertScopeSet(t, strings.Join(scopes, " "), q.Get("scope"))
 
 	var codeScopes []string
 	var raw []byte
+	digest := credential.Digest(code, fx.pepper)
 	if err := fx.db.QueryRowContext(t.Context(),
-		`SELECT scopes FROM oauth_authorization_codes`).Scan(&raw); err != nil {
+		`SELECT scopes FROM oauth_authorization_codes WHERE code_digest = ?`, digest[:]).Scan(&raw); err != nil {
 		t.Fatalf("select code scopes: %v", err)
 	}
 	if err := json.Unmarshal(raw, &codeScopes); err != nil {
 		t.Fatalf("decode code scopes: %v", err)
 	}
-	assertScopeSet(t, strings.Join(codeScopes, " "), "mcp:connect studio:read")
+	assertScopeSet(t, strings.Join(codeScopes, " "), q.Get("scope"))
 
 	status, tokens, errResp := fx.exchangeToken(t, code, nil)
 	if status != http.StatusOK {
 		t.Fatalf("exchange failed: status = %d error = %q (%s)", status, errResp.Error, errResp.Description)
 	}
-	assertScopeSet(t, tokens.Scope, "mcp:connect studio:read")
+	assertScopeSet(t, tokens.Scope, q.Get("scope"))
+}
 
-	// Approving a scope the request never asked for is rejected.
+func TestConsentRequiresActiveStudioSession(t *testing.T) {
+	fx := newMcpFixture(t, nil)
 	params := redirectParams(t, fx.approveConsent(t, fx.authorizeQuery(nil), func(f *url.Values) {
-		(*f)["grant"] = []string{"studio:input"}
+		f.Del("studio_session_id")
 	}))
 	if params.Get("error") != "access_denied" {
-		t.Fatalf("error = %q, want access_denied for scope escalation", params.Get("error"))
+		t.Fatalf("missing Studio: error = %q, want access_denied", params.Get("error"))
 	}
-
-	// Approving nothing is rejected.
-	params = redirectParams(t, fx.approveConsent(t, fx.authorizeQuery(nil), func(f *url.Values) {
-		f.Del("grant")
-	}))
-	if params.Get("error") != "access_denied" {
-		t.Fatalf("error = %q, want access_denied for an empty scope set", params.Get("error"))
-	}
-	if n := fx.queryInt(t, "SELECT COUNT(*) FROM oauth_grants"); n != 1 {
-		t.Fatalf("denied approvals must not change the grant count, got %d", n)
+	if n := fx.queryInt(t, "SELECT COUNT(*) FROM oauth_grants"); n != 0 {
+		t.Fatalf("missing Studio must not persist a grant, got %d", n)
 	}
 }
 
@@ -285,13 +320,8 @@ func TestConsentStudioSessionBinding(t *testing.T) {
 func TestConsentGrantUpsertsPerUserClientDevice(t *testing.T) {
 	fx := newMcpFixture(t, nil)
 	q := fx.authorizeQuery(nil)
-
-	_, _ = fx.consentCode(t, q, func(f *url.Values) {
-		(*f)["grant"] = []string{"mcp:connect", "studio:read", "studio:edit"}
-	})
-	_, _ = fx.consentCode(t, q, func(f *url.Values) {
-		(*f)["grant"] = []string{"mcp:connect"}
-	})
+	_, _ = fx.consentCode(t, q, nil)
+	_, _ = fx.consentCode(t, q, nil)
 
 	if n := fx.queryInt(t, "SELECT COUNT(*) FROM oauth_grants"); n != 1 {
 		t.Fatalf("repeated consent must reuse the grant row, got %d", n)
@@ -303,7 +333,7 @@ func TestConsentGrantUpsertsPerUserClientDevice(t *testing.T) {
 		t.Fatalf("each approval must audit, got %d", n)
 	}
 	_, _, _, scopes := fx.consentGrant(t)
-	assertScopeSet(t, strings.Join(scopes, " "), "mcp:connect")
+	assertScopeSet(t, strings.Join(scopes, " "), q.Get("scope"))
 }
 
 func TestConsentAuditFailureRollsBackGrant(t *testing.T) {
