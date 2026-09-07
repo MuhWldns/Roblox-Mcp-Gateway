@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+type UserRow struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	Subject     string `json:"subject"`
+}
+
 // ErrNotFound reports that a dashboard read or mutation named an object the
 // session user does not own — or that does not exist at all. The two cases
 // are deliberately indistinguishable so responses leak nothing.
@@ -86,6 +92,7 @@ type LicenseRow struct {
 // one transaction; the correlation argument seeds the audit trail (the
 // request id in production).
 type Store interface {
+	AdminUsers(ctx context.Context, after string, limit int) ([]UserRow, error)
 	// Devices lists the user's devices.
 	Devices(ctx context.Context, userID string) ([]DeviceRow, error)
 	// Studios lists the user's Studio sessions.

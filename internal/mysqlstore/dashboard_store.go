@@ -29,6 +29,23 @@ func NewDashboardStore(db *sql.DB, audits *audit.Service, pepper []byte) *Dashbo
 	return &DashboardStore{DB: db, Audits: audits, Pepper: pepper}
 }
 
+func (s *DashboardStore) AdminUsers(ctx context.Context, after string, limit int) ([]dashboard.UserRow, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT u.id, COALESCE(i.display_name, ''), COALESCE(i.provider_subject, '') FROM users u LEFT JOIN user_identities i ON i.id = (SELECT MIN(ui.id) FROM user_identities ui WHERE ui.user_id = u.id AND ui.provider = 'roblox' AND ui.status = 'active') WHERE u.id > ? ORDER BY u.id LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("mysqlstore: list admin users: %w", err)
+	}
+	defer rows.Close()
+	out := make([]dashboard.UserRow, 0)
+	for rows.Next() {
+		var user dashboard.UserRow
+		if err := rows.Scan(&user.ID, &user.DisplayName, &user.Subject); err != nil {
+			return nil, err
+		}
+		out = append(out, user)
+	}
+	return out, rows.Err()
+}
+
 func (s *DashboardStore) check(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("mysqlstore: nil context")

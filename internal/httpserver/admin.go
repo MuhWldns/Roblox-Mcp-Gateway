@@ -99,6 +99,20 @@ func (a *adminAPI) authorized(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (a *adminAPI) listUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := a.store.AdminUsers(r.Context(), r.URL.Query().Get("after"), 51)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "users unavailable")
+		return
+	}
+	next := ""
+	if len(users) > 50 {
+		users = users[:50]
+		next = users[49].ID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users, "next": next})
+}
+
 // beginCase reserves the support case id. A second execution of the same id —
 // including a concurrent one — is rejected; the reservation is released when
 // the mutation fails so a transient failure never burns the case.

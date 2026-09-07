@@ -449,6 +449,11 @@ export interface AdminExtensionRequest {
   evidence_ref: string;
 }
 
+export interface AdminUser { id: string; display_name: string; subject: string }
+export function getAdminUsers(after = "") {
+  return request<{ users: AdminUser[]; next: string }>(`/api/v1/admin/users?after=${encodeURIComponent(after)}`);
+}
+
 export async function getAdminTransferPreview(userId: string): Promise<AdminTransferPreview> {
   return request<AdminTransferPreview>(
     `/api/v1/admin/users/${encodeURIComponent(userId)}/transfer-preview`,

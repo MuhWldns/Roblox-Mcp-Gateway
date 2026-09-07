@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
 import {
   type AdminTrialPreview,
   ApiError,
@@ -15,7 +15,8 @@ import StatusBadge from "../components/StatusBadge";
 // expiry shown by the preview. The server updates the same row only; no
 // second trial record can ever be created.
 export default function TrialExtension() {
-  const [userId, setUserId] = useState("");
+  const [params] = useSearchParams();
+  const [userId, setUserId] = useState(() => params.get("user_id") ?? "");
   const [preview, setPreview] = useState<AdminTrialPreview | null>(null);
   const [denied, setDenied] = useState(false);
   const [forbidden, setForbidden] = useState(false);

@@ -68,6 +68,17 @@ function renderAt(path: string, element: React.ReactElement) {
   );
 }
 
+it("selects a listed user for trial extension without typing an ID", async () => {
+  installFetch({ "GET /api/v1/admin/users": { json: { users: [{ id: "user-picked", display_name: "Builder", subject: "1234" }], next: "" } } });
+  render(<MemoryRouter initialEntries={["/admin"]}><Routes>
+    <Route path="/admin" element={<Admin />} />
+    <Route path="/admin/extension" element={<TrialExtension />} />
+  </Routes></MemoryRouter>);
+  await screen.findByText("Builder");
+  await userEvent.click(screen.getByRole("link", { name: "Extend trial" }));
+  expect((screen.getByTestId("extension-user-id") as HTMLInputElement).value).toBe("user-picked");
+});
+
 const csrfUrl = "GET /api/v1/csrf";
 const transferPreviewUrl = "GET /api/v1/admin/users/user-1/transfer-preview";
 const recoveryPreviewUrl = "GET /api/v1/admin/users/user-1/recovery-preview";
