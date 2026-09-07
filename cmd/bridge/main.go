@@ -18,6 +18,7 @@ import (
 
 	"robloxkit/internal/appconfig"
 	"robloxkit/internal/bridgeapp"
+	"robloxkit/internal/bridgeconfig"
 	"robloxkit/internal/mcpprocess"
 	"robloxkit/internal/statusui"
 )
@@ -202,10 +203,46 @@ func runEnrollFlow(ctx context.Context, config appconfig.Enroll, out io.Writer, 
 	if err != nil {
 		return err
 	}
-
+	// The device id is the installation identity: once a credential exists
+	// for it, re-running enroll would mint a second id, orphan the old
+	// device row, and invite accidental rotations. Refuse instead — the
+	// smart mode re-enrolls with the SAME id, and explicit rotation goes
+	// through the dashboard.
+	if _, err := store.Load(); err == nil {
+		return errors.New("device credential already exists; delete it (or use the smart first-run flow) to re-enroll this device")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read device credential: %w", err)
+	}
+	// Reuse the wizard's device id when one was saved, so every mode on
+	// this installation claims the same device. A fresh installation
+	// generates a new id and persists it BEFORE the exchange, so a lost
+	// token response cannot orphan the identity.
+	configPath, err := bridgeconfig.DefaultPath()
+	if err != nil {
+		return fmt.Errorf("locate configuration: %w", err)
+	}
+	saved, err := bridgeconfig.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w (delete %s to restart setup)", err, configPath)
+	}
+	deviceID := saved.DeviceID
+	if deviceID == "" {
+		deviceID = newEnrollDeviceID()
+	}
+	if saved.GatewayURL == "" || saved.DeviceID == "" || saved.MCPLauncher == "" {
+		saved = bridgeconfig.Config{
+			Version:     bridgeconfig.CurrentVersion,
+			GatewayURL:  saved.GatewayURL,
+			DeviceID:    deviceID,
+			MCPLauncher: saved.MCPLauncher,
+		}
+		if err := bridgeconfig.Save(configPath, saved); err != nil {
+			return fmt.Errorf("save configuration: %w", err)
+		}
+	}
 	return bridgeapp.RunEnroll(ctx, bridgeapp.EnrollConfig{
 		APIBaseURL:    origin,
-		DeviceID:      newEnrollDeviceID(),
+		DeviceID:      deviceID,
 		DeviceName:    hostname() + " (RobloxBridge)",
 		Hostname:      hostname(),
 		Platform:      runtime.GOOS,

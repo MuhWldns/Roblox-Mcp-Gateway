@@ -181,21 +181,24 @@ func runWizard(ctx context.Context, deps firstRunDeps, configPath, credentialPat
 	if deviceID == "" {
 		deviceID = newEnrollDeviceID()
 	}
-	if err := runEnrollment(ctx, deps, gatewayURL, deviceID, credentialPath); err != nil {
-		return bridgeconfig.Config{}, err
-	}
-
-	config := bridgeconfig.Config{
+	// Persist the installation identity BEFORE the exchange. If the process
+	// dies between the gateway commit and the token response (or the token
+	// response is lost), the next run reuses this device id and the server
+	// re-claim path mints a fresh credential for the same device.
+	pending := bridgeconfig.Config{
 		Version:     bridgeconfig.CurrentVersion,
 		GatewayURL:  gatewayURL,
 		DeviceID:    deviceID,
 		MCPLauncher: launcher,
 	}
-	if err := bridgeconfig.Save(configPath, config); err != nil {
+	if err := bridgeconfig.Save(configPath, pending); err != nil {
 		return bridgeconfig.Config{}, fmt.Errorf("save configuration: %w", err)
 	}
+	if err := runEnrollment(ctx, deps, gatewayURL, deviceID, credentialPath); err != nil {
+		return bridgeconfig.Config{}, err
+	}
 	fmt.Fprintln(deps.stdout, "Setup complete. This PC is now linked to your RobloxKit account.")
-	return config, nil
+	return pending, nil
 }
 
 // runEnrollment drives one enrollment pass through the shared runEnrollFlow,

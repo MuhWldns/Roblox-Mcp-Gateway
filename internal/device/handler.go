@@ -185,6 +185,12 @@ func (h *EnrollmentExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusForbidden, "trial already used")
 		case errors.Is(err, entitlement.ErrNoSlot):
 			writeError(w, http.StatusForbidden, "no free device slot")
+		case errors.Is(err, entitlement.ErrDeviceOwnedByOther):
+			writeError(w, http.StatusConflict, "device id registered to another account")
+		case strings.Contains(err.Error(), " is revoked"):
+			writeError(w, http.StatusForbidden, "device is revoked; ask an admin or use a transfer")
+		case strings.Contains(err.Error(), " is "):
+			writeError(w, http.StatusForbidden, "device is not active")
 		default:
 			writeError(w, http.StatusInternalServerError, "enrollment unavailable")
 		}

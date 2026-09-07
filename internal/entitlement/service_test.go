@@ -1,6 +1,7 @@
 package entitlement_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -265,6 +266,101 @@ func TestRecoveryRevokesAllCredentialsAndPreservesTrial(t *testing.T) {
 	if !started.Equal(ent.StartedAt) || !ends.Equal(ent.EndsAt) {
 		t.Fatalf("recovery reset trial: started %v ends %v", started, ends)
 	}
+}
+
+func TestReclaimSameDeviceMintsNewCredentialAndKeepsTrialWindow(t *testing.T) {
+	clock := fixedClock{trialBase()}
+	svc, _, db := newStack(t, clock)
+	ent, _, err := svc.BindFirstDevice(t.Context(), firstBinding("u1", "i1", "555", "d1", digest("c1")))
+	if err != nil {
+		t.Fatalf("first bind: %v", err)
+	}
+	later := fixedClock{trialBase().Add(3 * 24 * time.Hour)}
+	rebound, binding, err := entitlement.NewService(storeOver(db, fixedClock{trialBase()}), later).BindFirstDevice(t.Context(), firstBinding("u1", "i1", "555", "d1", digest("c2")))
+	if err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	if !rebound.StartedAt.Equal(ent.StartedAt) || !rebound.EndsAt.Equal(ent.EndsAt) {
+		t.Fatalf("re-claim restarted trial window: %+v, want %+v", rebound, ent)
+	}
+	if binding.Status != "active" || binding.DeviceID != "d1" {
+		t.Fatalf("re-claim binding = %+v", binding)
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM trial_entitlements"); got != 1 {
+		t.Fatalf("trial rows after re-claim = %d, want 1", got)
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM device_credentials WHERE device_id = 'd1' AND revoked_at IS NULL"); got != 1 {
+		t.Fatalf("active credentials after re-claim = %d, want exactly 1", got)
+	}
+	var activeDigest []byte
+	if err := db.QueryRowContext(t.Context(), "SELECT credential_digest FROM device_credentials WHERE device_id = 'd1' AND revoked_at IS NULL").Scan(&activeDigest); err != nil {
+		t.Fatalf("read active credential: %v", err)
+	}
+	if want := digest("c2"); !bytes.Equal(activeDigest, want[:]) {
+		t.Fatal("re-claim did not activate the fresh credential digest")
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM audit_logs WHERE action = 'device.reclaim'"); got != 1 {
+		t.Fatalf("device.reclaim audit rows = %d, want 1", got)
+	}
+}
+
+func TestReclaimRejectsForeignDeviceAndRevokedDevice(t *testing.T) {
+	clock := fixedClock{trialBase()}
+	svc, _, db := newStack(t, clock)
+	if _, _, err := svc.BindFirstDevice(t.Context(), firstBinding("uA", "ia", "601", "dA", digest("ca"))); err != nil {
+		t.Fatalf("first bind uA: %v", err)
+	}
+	if _, _, err := svc.BindFirstDevice(t.Context(), firstBinding("uB", "ib", "602", "dB", digest("cb"))); err != nil {
+		t.Fatalf("first bind uB: %v", err)
+	}
+	// uA tries to re-claim uB's device: refused, and uB's credential state
+	// must be untouched.
+	if _, _, err := svc.BindFirstDevice(t.Context(), firstBinding("uA", "ia", "601", "dB", digest("steal"))); !errors.Is(err, entitlement.ErrDeviceOwnedByOther) {
+		t.Fatalf("foreign re-claim error = %v, want ErrDeviceOwnedByOther", err)
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM device_credentials WHERE device_id = 'dB' AND revoked_at IS NULL"); got != 1 {
+		t.Fatalf("foreign re-claim altered credentials: %d active, want 1", got)
+	}
+	// A revoked device is never silently reactivated by a re-claim.
+	store := storeOver(db, fixedClock{trialBase()})
+	if err := store.RevokeDevice(t.Context(), "dA", trialBase().Add(time.Hour)); err != nil {
+		t.Fatalf("RevokeDevice: %v", err)
+	}
+	if _, _, err := entitlement.NewService(store, fixedClock{trialBase().Add(2 * time.Hour)}).BindFirstDevice(t.Context(), firstBinding("uA", "ia", "601", "dA", digest("again"))); err == nil {
+		t.Fatal("revoked re-claim unexpectedly succeeded")
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM device_credentials WHERE device_id = 'dA' AND revoked_at IS NULL"); got != 1 {
+		t.Fatalf("revoked re-claim minted credential: %d active, want 1 (pre-revoke)", got)
+	}
+}
+
+func TestReclaimAfterLostTokenResponseSucceeds(t *testing.T) {
+	clock := fixedClock{trialBase()}
+	svc, _, db := newStack(t, clock)
+	if _, _, err := svc.BindFirstDevice(t.Context(), firstBinding("u1", "i1", "610", "d1", digest("lost"))); err != nil {
+		t.Fatalf("first bind: %v", err)
+	}
+	// Simulate the bridge retrying enrollment with the same device id after
+	// the first token response never arrived.
+	rebound, _, err := entitlement.NewService(storeOver(db, fixedClock{trialBase()}), fixedClock{trialBase().Add(time.Minute)}).BindFirstDevice(t.Context(), firstBinding("u1", "i1", "610", "d1", digest("retry")))
+	if err != nil {
+		t.Fatalf("retry bind: %v", err)
+	}
+	if rebound.ID == "" {
+		t.Fatal("retry returned empty entitlement id")
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM trial_entitlements WHERE user_id = 'u1'"); got != 1 {
+		t.Fatalf("trial rows after retry = %d, want 1", got)
+	}
+	if got := countRows(t, db, "SELECT COUNT(*) FROM device_credentials WHERE device_id = 'd1' AND revoked_at IS NULL"); got != 1 {
+		t.Fatalf("active credentials after retry = %d, want 1", got)
+	}
+}
+
+// storeOver rebinds a new store+audit stack onto an existing test database,
+// mirroring how a later process would reopen the same persistence.
+func storeOver(db *sql.DB, clock entitlement.Clock) *mysqlstore.EntitlementStore {
+	return mysqlstore.NewEntitlementStore(db, clock, audit.NewService(mysqlstore.NewAuditStore(db)))
 }
 
 // entitlementTestDatabase provisions a fresh, migrated schema per test.
