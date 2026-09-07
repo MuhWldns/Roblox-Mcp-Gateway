@@ -20,11 +20,62 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+func TestRobloxFlowBindsOnlySafeAuthorizeContinuation(t *testing.T) {
+	valid := "/oauth/authorize?client_id=https%3A%2F%2Fchatgpt.com%2Fconnector&state=opaque&scope=mcp%3Aconnect+studio%3Aread"
+	invalid := []string{
+		"https://evil.example/oauth/authorize",
+		"//evil.example/oauth/authorize",
+		"/oauth/authorize#fragment",
+		"/download?next=/oauth/authorize",
+		"/oauth/authorize?bad=%zz",
+		"/oauth/authorize?next=" + strings.Repeat("x", 4096),
+	}
+
+	for _, candidate := range invalid {
+		fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
+		flow := fixture.flow(t, nil)
+		authorize, transaction, err := flow.Begin(t.Context(), candidate)
+		if err != nil {
+			t.Fatalf("begin invalid continuation %q: %v", candidate, err)
+		}
+		if transaction.ReturnTo != "" {
+			t.Fatalf("invalid continuation %q stored as %q", candidate, transaction.ReturnTo)
+		}
+		if strings.Contains(string(authorize), candidate) {
+			t.Fatalf("provider authorize URL disclosed continuation %q", candidate)
+		}
+	}
+
+	fixture := newProviderFixture(t, providerUser{Sub: "1516563360", PreferredUsername: "Builderman"})
+	flow := fixture.flow(t, nil)
+	authorize, transaction, err := flow.Begin(t.Context(), valid)
+	if err != nil {
+		t.Fatalf("begin valid continuation: %v", err)
+	}
+	if transaction.ReturnTo != valid {
+		t.Fatalf("stored continuation = %q, want %q", transaction.ReturnTo, valid)
+	}
+	if strings.Contains(string(authorize), valid) {
+		t.Fatal("provider authorize URL disclosed valid continuation")
+	}
+	fixture.setNonce(transaction.Nonce)
+	_, returnTo, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+	if err != nil {
+		t.Fatalf("complete valid continuation: %v", err)
+	}
+	if returnTo != valid {
+		t.Fatalf("completed continuation = %q, want %q", returnTo, valid)
+	}
+	if _, replayReturnTo, replayErr := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(replayErr, ErrInvalidTransaction) || replayReturnTo != "" {
+		t.Fatalf("replay error/continuation = %v/%q", replayErr, replayReturnTo)
+	}
+}
+
 func TestRobloxFlowUsesPKCEStateNonceRedirectAndExactScopes(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360", PreferredUsername: "Builderman", Name: "Builder Man"})
 	flow := fixture.flow(t, nil)
 
-	authorize, transaction, err := flow.Begin(t.Context())
+	authorize, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -52,7 +103,7 @@ func TestRobloxFlowUsesPKCEStateNonceRedirectAndExactScopes(t *testing.T) {
 	if strings.Contains(string(authorize), transaction.CodeVerifier) {
 		t.Fatal("authorize URL discloses the PKCE verifier")
 	}
-	_, secondTransaction, err := flow.Begin(t.Context())
+	_, secondTransaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("second begin: %v", err)
 	}
@@ -64,7 +115,7 @@ func TestRobloxFlowUsesPKCEStateNonceRedirectAndExactScopes(t *testing.T) {
 	}
 	fixture.setNonce(transaction.Nonce)
 
-	identity, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+	identity, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -77,7 +128,7 @@ func TestRobloxFlowUsesPKCEStateNonceRedirectAndExactScopes(t *testing.T) {
 func TestRobloxFlowRejectsReplayAndConcurrentCallbackReuse(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360", PreferredUsername: "Builderman"})
 	flow := fixture.flow(t, nil)
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -91,7 +142,7 @@ func TestRobloxFlowRejectsReplayAndConcurrentCallbackReuse(t *testing.T) {
 		go func() {
 			ready.Done()
 			<-start
-			_, err := flow.Complete(context.Background(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+			_, _, err := flow.Complete(context.Background(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
 			results <- err
 		}()
 	}
@@ -117,7 +168,7 @@ func TestRobloxFlowRejectsReplayAndConcurrentCallbackReuse(t *testing.T) {
 	if got := fixture.tokenCalls.Load(); got != 1 {
 		t.Fatalf("token exchanges = %d, want 1", got)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
+	if _, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
 		t.Fatalf("replay error = %v, want ErrInvalidTransaction", err)
 	}
 }
@@ -125,18 +176,18 @@ func TestRobloxFlowRejectsReplayAndConcurrentCallbackReuse(t *testing.T) {
 func TestRobloxFlowRejectsWrongBrowserBindingAndConsumesTransaction(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
 	flow := fixture.flow(t, nil)
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	if transaction.Binding == "" {
 		t.Fatal("begin returned empty browser binding")
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: "attacker-binding"}); !errors.Is(err, ErrInvalidTransaction) {
-		t.Fatalf("wrong-binding error = %v, want ErrInvalidTransaction", err)
+	if _, returnTo, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: "attacker-binding"}); !errors.Is(err, ErrInvalidTransaction) || returnTo != "" {
+		t.Fatalf("wrong-binding error/continuation = %v/%q", err, returnTo)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
-		t.Fatalf("wrong-binding replay error = %v, want ErrInvalidTransaction", err)
+	if _, returnTo, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) || returnTo != "" {
+		t.Fatalf("wrong-binding replay error/continuation = %v/%q", err, returnTo)
 	}
 	if got := fixture.tokenCalls.Load(); got != 0 {
 		t.Fatalf("token exchanges = %d, want 0", got)
@@ -147,19 +198,19 @@ func TestRobloxFlowRejectsStaleCallbackWithoutCallingProvider(t *testing.T) {
 	now := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
 	flow := fixture.flow(t, func() time.Time { return now })
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	now = now.Add(5 * time.Minute)
 
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrExpiredTransaction) {
-		t.Fatalf("complete error = %v, want ErrExpiredTransaction", err)
+	if _, returnTo, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrExpiredTransaction) || returnTo != "" {
+		t.Fatalf("complete error/continuation = %v/%q", err, returnTo)
 	}
 	if got := fixture.tokenCalls.Load(); got != 0 {
 		t.Fatalf("token exchanges = %d, want 0", got)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
+	if _, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
 		t.Fatalf("stale replay error = %v, want ErrInvalidTransaction", err)
 	}
 }
@@ -169,11 +220,11 @@ func TestRobloxFlowRejectsAdmissionAtCapacity(t *testing.T) {
 	fixture.maxTransactions = 3
 	flow := fixture.flow(t, nil)
 	for range 3 {
-		if _, _, err := flow.Begin(t.Context()); err != nil {
+		if _, _, err := flow.Begin(t.Context(), ""); err != nil {
 			t.Fatalf("begin within capacity: %v", err)
 		}
 	}
-	if _, _, err := flow.Begin(t.Context()); !errors.Is(err, ErrTooManyTransactions) {
+	if _, _, err := flow.Begin(t.Context(), ""); !errors.Is(err, ErrTooManyTransactions) {
 		t.Fatalf("over-capacity begin error = %v, want ErrTooManyTransactions", err)
 	}
 }
@@ -183,14 +234,14 @@ func TestRobloxFlowReclaimsExpiredTransactionsAtCapacity(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
 	fixture.maxTransactions = 2
 	flow := fixture.flow(t, func() time.Time { return now })
-	if _, _, err := flow.Begin(t.Context()); err != nil {
+	if _, _, err := flow.Begin(t.Context(), ""); err != nil {
 		t.Fatalf("first begin: %v", err)
 	}
-	if _, _, err := flow.Begin(t.Context()); err != nil {
+	if _, _, err := flow.Begin(t.Context(), ""); err != nil {
 		t.Fatalf("second begin: %v", err)
 	}
 	now = now.Add(5 * time.Minute)
-	if _, _, err := flow.Begin(t.Context()); err != nil {
+	if _, _, err := flow.Begin(t.Context(), ""); err != nil {
 		t.Fatalf("begin after expired entries reclaimed: %v", err)
 	}
 	flow.mu.Lock()
@@ -204,14 +255,14 @@ func TestRobloxFlowReclaimsExpiredTransactionsAtCapacity(t *testing.T) {
 func TestRobloxFlowConsumesProviderDeniedTransaction(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
 	flow := fixture.flow(t, nil)
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{State: transaction.State, Binding: transaction.Binding, Error: "access_denied"}); !errors.Is(err, ErrProviderDenied) {
-		t.Fatalf("denied callback error = %v, want ErrProviderDenied", err)
+	if _, returnTo, err := flow.Complete(t.Context(), Callback{State: transaction.State, Binding: transaction.Binding, Error: "access_denied"}); !errors.Is(err, ErrProviderDenied) || returnTo != "" {
+		t.Fatalf("denied callback error/continuation = %v/%q", err, returnTo)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
+	if _, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
 		t.Fatalf("denied callback replay error = %v, want ErrInvalidTransaction", err)
 	}
 	if got := fixture.tokenCalls.Load(); got != 0 {
@@ -222,12 +273,12 @@ func TestRobloxFlowConsumesProviderDeniedTransaction(t *testing.T) {
 func TestRobloxFlowRejectsUserInfoWithoutSubjectAndDoesNotLeakTokens(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{PreferredUsername: "NoSubject"})
 	flow := fixture.flow(t, nil)
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	_, err = flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+	_, _, err = flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
 	if !errors.Is(err, ErrMissingSubject) {
 		t.Fatalf("complete error = %v, want ErrMissingSubject", err)
 	}
@@ -242,14 +293,14 @@ func TestRobloxFlowConsumesTransactionWhenTokenExchangeFails(t *testing.T) {
 	fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
 	fixture.failToken = true
 	flow := fixture.flow(t, nil)
-	_, transaction, err := flow.Begin(t.Context())
+	_, transaction, err := flow.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "bad-code", State: transaction.State, Binding: transaction.Binding}); err == nil {
-		t.Fatal("complete succeeded after provider token failure")
+	if _, returnTo, err := flow.Complete(t.Context(), Callback{Code: "bad-code", State: transaction.State, Binding: transaction.Binding}); err == nil || returnTo != "" {
+		t.Fatalf("token failure error/continuation = %v/%q", err, returnTo)
 	}
-	if _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
+	if _, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding}); !errors.Is(err, ErrInvalidTransaction) {
 		t.Fatalf("retry error = %v, want ErrInvalidTransaction", err)
 	}
 }
@@ -344,7 +395,7 @@ func TestRobloxFlowValidatesIDToken(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newProviderFixture(t, providerUser{Sub: "1516563360", PreferredUsername: "Builderman", Name: "Builder Man"})
 			flow := fixture.flow(t, nil)
-			_, transaction, err := flow.Begin(t.Context())
+			_, transaction, err := flow.Begin(t.Context(), "")
 			if err != nil {
 				t.Fatalf("begin: %v", err)
 			}
@@ -354,7 +405,7 @@ func TestRobloxFlowValidatesIDToken(t *testing.T) {
 				t.Fatal("mint produced an empty token")
 			}
 			fixture.setSigner(func() string { return tokenString })
-			identity, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+			identity, _, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
 			if !tc.wantIs(err) {
 				t.Fatalf("complete error = %v", err)
 			}

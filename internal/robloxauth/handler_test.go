@@ -24,13 +24,16 @@ func TestRobloxHandlerBeginRedirectsWithoutExposingTransactionSecrets(t *testing
 	}
 	handler := Handler{Flow: flow, Identities: &handlerIdentities{}, Sessions: &handlerSessions{}, SuccessRedirect: "/dashboard"}
 	recorder := httptest.NewRecorder()
-	handler.Begin(recorder, httptest.NewRequest(http.MethodGet, "/auth/roblox", nil))
+	handler.Begin(recorder, httptest.NewRequest(http.MethodGet, "/auth/roblox?next=%2Foauth%2Fauthorize%3Fclient_id%3Dchatgpt%26state%3Dopaque", nil))
 
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
 	if location := recorder.Header().Get("Location"); location != string(flow.authorize) {
 		t.Fatalf("location = %q", location)
+	}
+	if flow.returnTo != "/oauth/authorize?client_id=chatgpt&state=opaque" {
+		t.Fatalf("begin continuation = %q", flow.returnTo)
 	}
 	cookies := recorder.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != testBindingCookie || cookies[0].Value != flow.transaction.Binding || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
@@ -78,6 +81,28 @@ func TestRobloxHandlerCallbackCreatesApplicationSessionAndLeaksNoProviderTokens(
 	}
 	if strings.Contains(visible, "1516563360") {
 		t.Fatalf("redirect response disclosed provider identity: %q", visible)
+	}
+}
+
+func TestRobloxHandlerCallbackRedirectsToCompletedAuthorizeContinuation(t *testing.T) {
+	flow := &handlerFlow{
+		identity: RobloxIdentity{Subject: "1516563360"},
+		returnTo: "/oauth/authorize?client_id=chatgpt&state=opaque",
+	}
+	handler := Handler{
+		Flow:            flow,
+		Identities:      &handlerIdentities{user: User{ID: "user-1"}},
+		Sessions:        &handlerSessions{plain: "rks_application-session"},
+		SuccessRedirect: "/download",
+	}
+	request := httptest.NewRequest(http.MethodGet, "/auth/roblox/callback?code=provider-code&state=opaque-state", nil)
+	request.AddCookie(&http.Cookie{Name: testBindingCookie, Value: "browser-binding"})
+	recorder := httptest.NewRecorder()
+
+	handler.Callback(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != flow.returnTo {
+		t.Fatalf("callback response = %d location %q", recorder.Code, recorder.Header().Get("Location"))
 	}
 }
 
@@ -132,17 +157,19 @@ type handlerFlow struct {
 	transaction LoginTransaction
 	identity    RobloxIdentity
 	callback    Callback
+	returnTo    string
 	beginErr    error
 	completeErr error
 }
 
-func (f *handlerFlow) Begin(context.Context) (AuthorizeURL, LoginTransaction, error) {
+func (f *handlerFlow) Begin(_ context.Context, returnTo string) (AuthorizeURL, LoginTransaction, error) {
+	f.returnTo = returnTo
 	return f.authorize, f.transaction, f.beginErr
 }
 
-func (f *handlerFlow) Complete(_ context.Context, callback Callback) (RobloxIdentity, error) {
+func (f *handlerFlow) Complete(_ context.Context, callback Callback) (RobloxIdentity, string, error) {
 	f.callback = callback
-	return f.identity, f.completeErr
+	return f.identity, f.returnTo, f.completeErr
 }
 
 type handlerIdentities struct {

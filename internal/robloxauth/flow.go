@@ -29,6 +29,7 @@ const (
 	defaultTransactionTTL  = 5 * time.Minute
 	defaultMaxTransactions = 1000
 	randomCredentialBytes  = 32
+	maxReturnToLength      = 4096
 )
 
 type AuthorizeURL string
@@ -38,6 +39,7 @@ type LoginTransaction struct {
 	Nonce        string
 	CodeVerifier string
 	Binding      string
+	ReturnTo     string
 	ExpiresAt    time.Time
 }
 
@@ -151,7 +153,7 @@ func NewFlow(config Config) (*Flow, error) {
 	}, nil
 }
 
-func (f *Flow) Begin(ctx context.Context) (AuthorizeURL, LoginTransaction, error) {
+func (f *Flow) Begin(ctx context.Context, returnTo string) (AuthorizeURL, LoginTransaction, error) {
 	if ctx == nil {
 		return "", LoginTransaction{}, errors.New("robloxauth: nil context")
 	}
@@ -176,7 +178,7 @@ func (f *Flow) Begin(ctx context.Context) (AuthorizeURL, LoginTransaction, error
 	}
 	transaction := LoginTransaction{
 		State: state, Nonce: nonce, CodeVerifier: verifier, Binding: binding,
-		ExpiresAt: f.now().UTC().Add(f.transactionTTL),
+		ReturnTo: validateReturnTo(returnTo), ExpiresAt: f.now().UTC().Add(f.transactionTTL),
 	}
 	f.mu.Lock()
 	if len(f.transactions) >= f.maxTransactions {
@@ -207,12 +209,12 @@ func (f *Flow) Begin(ctx context.Context) (AuthorizeURL, LoginTransaction, error
 	return AuthorizeURL(f.client.endpoint("/oauth/v1/authorize") + "?" + query.Encode()), transaction, nil
 }
 
-func (f *Flow) Complete(ctx context.Context, callback Callback) (RobloxIdentity, error) {
+func (f *Flow) Complete(ctx context.Context, callback Callback) (RobloxIdentity, string, error) {
 	if ctx == nil {
-		return RobloxIdentity{}, errors.New("robloxauth: nil context")
+		return RobloxIdentity{}, "", errors.New("robloxauth: nil context")
 	}
 	if callback.State == "" {
-		return RobloxIdentity{}, ErrInvalidTransaction
+		return RobloxIdentity{}, "", ErrInvalidTransaction
 	}
 
 	f.mu.Lock()
@@ -222,44 +224,58 @@ func (f *Flow) Complete(ctx context.Context, callback Callback) (RobloxIdentity,
 	}
 	f.mu.Unlock()
 	if !ok {
-		return RobloxIdentity{}, ErrInvalidTransaction
+		return RobloxIdentity{}, "", ErrInvalidTransaction
 	}
 	if callback.Binding == "" || callback.Binding != transaction.Binding {
-		return RobloxIdentity{}, ErrInvalidTransaction
+		return RobloxIdentity{}, "", ErrInvalidTransaction
 	}
 	if !f.now().UTC().Before(transaction.ExpiresAt) {
-		return RobloxIdentity{}, ErrExpiredTransaction
+		return RobloxIdentity{}, "", ErrExpiredTransaction
 	}
 	if callback.Error != "" {
-		return RobloxIdentity{}, ErrProviderDenied
+		return RobloxIdentity{}, "", ErrProviderDenied
 	}
 	if callback.Code == "" {
-		return RobloxIdentity{}, ErrInvalidTransaction
+		return RobloxIdentity{}, "", ErrInvalidTransaction
 	}
 
 	tokens, err := f.client.exchange(ctx, callback.Code, transaction.CodeVerifier)
 	if err != nil {
-		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrTokenExchange, err)
+		return RobloxIdentity{}, "", fmt.Errorf("%w: %w", ErrTokenExchange, err)
 	}
 	info, err := f.client.userInfo(ctx, tokens.AccessToken)
 	if err != nil {
-		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrUserInfo, err)
+		return RobloxIdentity{}, "", fmt.Errorf("%w: %w", ErrUserInfo, err)
 	}
 	if strings.TrimSpace(info.Subject) == "" {
-		return RobloxIdentity{}, ErrMissingSubject
+		return RobloxIdentity{}, "", ErrMissingSubject
 	}
 	idSubject, err := f.jwks.verify(ctx, tokens.IDToken, f.issuer, f.client.clientID, transaction.Nonce)
 	if err != nil {
-		return RobloxIdentity{}, fmt.Errorf("%w: %w", ErrIDTokenValidation, err)
+		return RobloxIdentity{}, "", fmt.Errorf("%w: %w", ErrIDTokenValidation, err)
 	}
 	if idSubject != info.Subject {
-		return RobloxIdentity{}, ErrIDTokenSubjectMismatch
+		return RobloxIdentity{}, "", ErrIDTokenSubjectMismatch
 	}
 	username := info.Username
 	if username == "" {
 		username = info.LegacyUsername
 	}
-	return RobloxIdentity{Subject: info.Subject, Username: username, DisplayName: info.DisplayName}, nil
+	return RobloxIdentity{Subject: info.Subject, Username: username, DisplayName: info.DisplayName}, transaction.ReturnTo, nil
+}
+
+func validateReturnTo(raw string) string {
+	if raw == "" || len(raw) > maxReturnToLength {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Fragment != "" || parsed.Path != "/oauth/authorize" {
+		return ""
+	}
+	if _, err := url.ParseQuery(parsed.RawQuery); err != nil {
+		return ""
+	}
+	return raw
 }
 
 func randomCredential() (string, error) {

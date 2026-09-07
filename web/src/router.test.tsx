@@ -110,6 +110,37 @@ describe("dashboard shell routing", () => {
     expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
 
+  it("preserves an OAuth authorize continuation when starting Roblox login", async () => {
+    installFetch({ [meUrl]: { status: 401 } });
+    const continuation =
+      "/oauth/authorize?client_id=https%3A%2F%2Fchatgpt.com%2Fconnector&state=opaque&scope=mcp%3Aconnect+studio%3Aread";
+
+    await renderShellAt(`/login?next=${encodeURIComponent(continuation)}`);
+
+    const link = await screen.findByRole("link", { name: "Continue with Roblox" });
+    const target = new URL(link.getAttribute("href") ?? "", "http://localhost");
+    expect(target.pathname).toBe("/api/v1/auth/roblox/login");
+    expect(target.searchParams.get("next")).toBe(continuation);
+  });
+  it("resumes OAuth authorization for an already authenticated visitor", async () => {
+    installFetch({ [meUrl]: { json: freshMe } });
+    const continuation = "/oauth/authorize?client_id=chatgpt&state=opaque";
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    await renderShellAt(`/login?next=${encodeURIComponent(continuation)}`);
+
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect((click.mock.instances[0] as HTMLAnchorElement).getAttribute("href")).toBe(continuation);
+  });
+
+  it("keeps the normal authenticated login fallback on download", async () => {
+    installFetch({ [meUrl]: { json: freshMe }, [metadataUrl]: { json: metadata } });
+
+    const router = await renderShellAt("/login");
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/download"));
+  });
+
   it("renders the authenticated shell with section navigation", async () => {
     installFetch({ [meUrl]: { json: freshMe } });
 
