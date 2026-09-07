@@ -50,6 +50,8 @@ type RelayConfig struct {
 	Registry *bridgehub.Registry
 	// Pending correlates relayed requests with device responses.
 	Pending *Pending
+	// Store persists active studio sessions.
+	Store bridgehub.Store
 	// Timeout bounds one relayed request before its deadline fires.
 	Timeout time.Duration
 	// MaxEnvelopeBytes bounds relayed envelopes; zero selects the default.
@@ -63,6 +65,7 @@ type RelayConfig struct {
 type Relay struct {
 	registry *bridgehub.Registry
 	pending  *Pending
+	store    bridgehub.Store
 	timeout  time.Duration
 	limits   bridgeproto.Limits
 
@@ -72,32 +75,28 @@ type Relay struct {
 	statuses map[string]deviceSnapshot
 }
 
-// deviceSnapshot is the last reported Bridge status of one device, per the
-// device contract: readiness plus the count of open Studios.
 type deviceSnapshot struct {
 	Ready       bool
 	StudioCount int
 }
 
-// NewRelay validates the configuration and builds the relay.
 func NewRelay(cfg RelayConfig) (*Relay, error) {
 	if cfg.Registry == nil {
-		return nil, errors.New("mcpgateway: relay requires a registry")
+		return nil, errors.New("mcpgateway: registry is required")
 	}
 	if cfg.Pending == nil {
-		return nil, errors.New("mcpgateway: relay requires a pending registry")
+		return nil, errors.New("mcpgateway: pending tracker is required")
 	}
-	if cfg.Timeout <= 0 {
-		return nil, errors.New("mcpgateway: relay requires a positive timeout")
-	}
-	if cfg.MaxEnvelopeBytes <= 0 {
-		cfg.MaxEnvelopeBytes = defaultMaxEnvelopeBytes
+	maxEnvelope := cfg.MaxEnvelopeBytes
+	if maxEnvelope <= 0 {
+		maxEnvelope = defaultMaxEnvelopeBytes
 	}
 	return &Relay{
 		registry: cfg.Registry,
 		pending:  cfg.Pending,
+		store:    cfg.Store,
 		timeout:  cfg.Timeout,
-		limits:   bridgeproto.Limits{MaxPayloadBytes: cfg.MaxEnvelopeBytes},
+		limits:   bridgeproto.Limits{MaxPayloadBytes: maxEnvelope},
 		statuses: make(map[string]deviceSnapshot),
 	}, nil
 }
@@ -106,7 +105,7 @@ func NewRelay(cfg RelayConfig) (*Relay, error) {
 // resolve their correlated request; status snapshots update the device's
 // routing state. Unknown correlations — late or duplicate responses — are
 // dropped. The signature matches bridgehub's OnEnvelope hook.
-func (r *Relay) HandleEnvelope(_ context.Context, device bridgehub.Device, env bridgeproto.Envelope) {
+func (r *Relay) HandleEnvelope(ctx context.Context, device bridgehub.Device, env bridgeproto.Envelope) {
 	if r == nil {
 		return
 	}
@@ -117,6 +116,7 @@ func (r *Relay) HandleEnvelope(_ context.Context, device bridgehub.Device, env b
 		_ = r.pending.Resolve(env.GatewayRequestID, Result{Payload: env.Payload})
 	case bridgeproto.TypeStatus:
 		r.applyStatus(device.DeviceID, env.Payload)
+		r.syncStudioSession(ctx, device, env.Payload)
 	}
 }
 
@@ -381,4 +381,17 @@ func (r *Relay) applyStatus(deviceID string, payload json.RawMessage) {
 	r.statusMu.Lock()
 	r.statuses[deviceID] = deviceSnapshot{Ready: snapshot.MCPReady, StudioCount: snapshot.StudioCount}
 	r.statusMu.Unlock()
+}
+
+func (r *Relay) syncStudioSession(ctx context.Context, device bridgehub.Device, payload json.RawMessage) {
+	if r == nil || r.store == nil || device.UserID == "" || device.DeviceID == "" {
+		return
+	}
+	var snapshot struct {
+		StudioCount int `json:"studio_count"`
+	}
+	if err := json.Unmarshal(payload, &snapshot); err != nil || snapshot.StudioCount <= 0 {
+		return
+	}
+	_ = r.store.SyncActiveStudioSession(ctx, device.UserID, device.DeviceID)
 }

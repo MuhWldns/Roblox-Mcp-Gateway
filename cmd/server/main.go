@@ -28,6 +28,7 @@ import (
 	"robloxkit/internal/mysqlstore"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
+	"robloxkit/pkg/bridgeproto"
 )
 
 const (
@@ -164,6 +165,7 @@ func main() {
 	// mount. Relayed MCP tool delivery lands with the connector gateway
 	// wiring; the hub alone already carries hello, heartbeat, and
 	// revocation traffic.
+	var gatewayHandler func(ctx context.Context, device bridgehub.Device, env bridgeproto.Envelope)
 	hub, err := bridgehub.NewHub(bridgehub.Config{
 		Store:             bridgehub.NewSQLStore(db),
 		Entitlements:      entitlements,
@@ -172,6 +174,11 @@ func main() {
 		HeartbeatTimeout:  config.BridgeTimeout,
 		QueueDepth:        config.BridgeQueueLimit,
 		MaxEnvelopeBytes:  config.BridgeMaxMessageBytes,
+		OnEnvelope: func(ctx context.Context, device bridgehub.Device, env bridgeproto.Envelope) {
+			if gatewayHandler != nil {
+				gatewayHandler(ctx, device, env)
+			}
+		},
 	})
 	if err != nil {
 		logger.Error("bridge hub setup failed", "error", err.Error())
@@ -249,6 +256,7 @@ func main() {
 		logger.Error("mcp gateway setup failed", "error", err.Error())
 		os.Exit(1)
 	}
+	gatewayHandler = gateway.HandleEnvelope
 
 	// The administration surface is enabled unconditionally; the configured
 	// ADMIN_USER_IDS decide who may execute. An empty list leaves every

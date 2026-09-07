@@ -67,6 +67,7 @@ type Store interface {
 	DeviceOwnedAndActive(ctx context.Context, userID, deviceID string) (bool, error)
 	HasActiveDeviceBinding(ctx context.Context, userID, deviceID string) (bool, error)
 	UserIdentity(ctx context.Context, userID string) (Identity, error)
+	SyncActiveStudioSession(ctx context.Context, userID, deviceID string) error
 }
 
 // Authenticator validates a presented device credential against the store,
@@ -288,4 +289,24 @@ func (s *SQLStore) UserIdentity(ctx context.Context, userID string) (Identity, e
 		return Identity{}, fmt.Errorf("bridgehub: lookup identity: %w", err)
 	}
 	return identity, nil
+}
+
+// SyncActiveStudioSession ensures an active studio session exists for the user and device.
+func (s *SQLStore) SyncActiveStudioSession(ctx context.Context, userID, deviceID string) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	var count int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM studio_sessions WHERE user_id = ? AND device_id = ? AND status = 'active'`, userID, deviceID).Scan(&count)
+	if err == nil && count > 0 {
+		return nil
+	}
+	sessionID := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		time.Now().UnixNano()&0xffffffff,
+		(time.Now().UnixNano()>>32)&0xffff,
+		0x4000|((time.Now().UnixNano()>>48)&0x0fff),
+		0x8000|(time.Now().UnixNano()&0x3fff),
+		time.Now().UnixNano()&0xffffffffffff)
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO studio_sessions (id, user_id, device_id, studio_id, status, started_at) VALUES (?, ?, ?, 'Studio Session 1', 'active', NOW(6))`, sessionID, userID, deviceID)
+	return err
 }

@@ -193,6 +193,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	relay, err := NewRelay(RelayConfig{
 		Registry:         cfg.Registry,
 		Pending:          cfg.Pending,
+		Store:            cfg.Store,
 		Timeout:          cfg.RequestTimeout,
 		MaxEnvelopeBytes: defaultMaxEnvelopeBytes,
 	})
