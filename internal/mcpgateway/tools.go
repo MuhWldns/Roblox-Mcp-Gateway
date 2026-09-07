@@ -36,8 +36,6 @@ func (g *Gateway) sessionMiddleware(digest [32]byte) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			switch method {
-			case methodListTools:
-				return g.handleToolsList(ctx, req, digest)
 			case methodCallTool:
 				return g.handleToolsCall(ctx, req, digest)
 			default:
