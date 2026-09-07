@@ -285,20 +285,26 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}()
 		},
 	})
-	type EmptyArgs struct{}
+	type ToolArgs struct {
+		Path      string `json:"path,omitempty" jsonschema:"description=Workspace or script path"`
+		Script    string `json:"script,omitempty" jsonschema:"description=Luau code or script content"`
+		Name      string `json:"name,omitempty" jsonschema:"description=Instance name"`
+		ClassName string `json:"className,omitempty" jsonschema:"description=Roblox class name"`
+		Text      string `json:"text,omitempty" jsonschema:"description=Command text or argument"`
+	}
 	for toolName, requiredScope := range officialToolScopes {
 		name := toolName
 		scope := requiredScope
-		server.AddTool(&mcp.Tool{
+		mcp.AddTool(server, &mcp.Tool{
 			Name:        name,
 			Description: "Roblox Studio MCP tool: " + name,
-		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		}, func(ctx context.Context, req *mcp.CallToolRequest, args ToolArgs) (*mcp.CallToolResult, any, error) {
 			principal, err := g.reauthorize(ctx, digest)
 			if err != nil {
-				return nil, sessionDeniedError()
+				return nil, nil, sessionDeniedError()
 			}
 			if !scopeAllowed(principal.Grant.Scopes, scope) && !scopeAllowed(principal.Grant.Scopes, mcpoauth.ScopeConnect) {
-				return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
+				return nil, nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
 			}
 			paramsRaw, _ := json.Marshal(map[string]any{
 				"name":      req.Params.Name,
@@ -307,7 +313,7 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			response, trace, err := g.relay.CallDetailed(ctx, sessionIDOf(req), principal.Grant,
 				methodCallTool, paramsRaw)
 			if err != nil {
-				return nil, relayError(err)
+				return nil, nil, relayError(err)
 			}
 			result, wireErr := parseRelayResponse(response)
 			outcome := "success"
@@ -316,14 +322,14 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}
 			g.recordToolUsage(trace, principal.Grant, outcome)
 			if wireErr != nil {
-				return nil, wireErr
+				return nil, nil, wireErr
 			}
 			var callResult mcp.CallToolResult
 			if err := json.Unmarshal(result, &callResult); err != nil {
-				return nil, sanitizedInternalError()
+				return nil, nil, sanitizedInternalError()
 			}
 			g.recordToolSuccess(ctx, trace, principal.Grant, req.Params.Name)
-			return &callResult, nil
+			return &callResult, nil, nil
 		})
 	}
 	server.AddReceivingMiddleware(g.sessionMiddleware(digest))
