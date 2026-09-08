@@ -59,7 +59,7 @@ export default function Home() {
             </div>
             {signedIn ? (
               <Link
-                to="/devices"
+                to="/dashboard"
                 className="text-sm font-semibold text-navy px-4 py-2 min-h-[36px] inline-flex items-center border border-border rounded-md bg-white hover:bg-surface-alt transition-colors no-underline"
               >
                 Open dashboard
@@ -87,14 +87,14 @@ export default function Home() {
             <div className="flex items-center justify-center gap-3 flex-wrap">
               {signedIn ? (
                 <Link
-                  to="/devices"
+                  to="/dashboard"
                   className="inline-flex items-center px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors no-underline min-h-[44px]"
                 >
                   Open dashboard
                 </Link>
               ) : (
                 <Link
-                  to="/login"
+                  to="/setup"
                   className="inline-flex items-center px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors no-underline min-h-[44px]"
                 >
                   Start setup

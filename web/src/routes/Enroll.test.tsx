@@ -115,20 +115,9 @@ describe("onboarding web flow", () => {
 
     renderAt("/download", <Download />);
 
-    expect((await screen.findByRole("link", { name: /continue with/i })).getAttribute("href")).toBe("/api/v1/auth/roblox/login");
+    expect((await screen.findByRole("link", { name: /continue with/i })).getAttribute("href")).toBe("/api/v1/auth/roblox/login?next=%2Fdownload");
   });
 
-  it("shows already authenticated users the download page and redirects them away from login", async () => {
-    installFetch({
-      [meUrl]: { json: freshMe },
-      [metadataUrl]: { json: metadata },
-    });
-
-    renderAt("/login", <Login />);
-
-    expect(await screen.findByText("Download Buildly Companion")).toBeTruthy();
-    expect(screen.getByTestId("bridge-version").textContent).toBe("1.4.2");
-  });
 
   it("displays checksum, version, and size on the authenticated download page", async () => {
     installFetch({

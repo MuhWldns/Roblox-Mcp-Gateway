@@ -26,9 +26,11 @@ func TestRobloxFlowBindsOnlySafeAuthorizeContinuation(t *testing.T) {
 		"https://evil.example/oauth/authorize",
 		"//evil.example/oauth/authorize",
 		"/oauth/authorize#fragment",
-		"/download?next=/oauth/authorize",
+		"/unknown?next=/oauth/authorize",
 		"/oauth/authorize?bad=%zz",
 		"/oauth/authorize?next=" + strings.Repeat("x", 4096),
+		"/\\evil.example/setup",
+		"/%2f%2fevil.example/setup",
 	}
 
 	for _, candidate := range invalid {
@@ -43,6 +45,19 @@ func TestRobloxFlowBindsOnlySafeAuthorizeContinuation(t *testing.T) {
 		}
 		if strings.Contains(string(authorize), candidate) {
 			t.Fatalf("provider authorize URL disclosed continuation %q", candidate)
+		}
+	}
+	for _, target := range []string{"/setup", "/dashboard", "/enroll?code=rkuc_TEST123"} {
+		fixture := newProviderFixture(t, providerUser{Sub: "1516563360"})
+		flow := fixture.flow(t, nil)
+		_, transaction, err := flow.Begin(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.setNonce(transaction.Nonce)
+		_, destination, err := flow.Complete(t.Context(), Callback{Code: "provider-code", State: transaction.State, Binding: transaction.Binding})
+		if err != nil || destination != target {
+			t.Fatalf("continuation = %q, %v; want %q", destination, err, target)
 		}
 	}
 

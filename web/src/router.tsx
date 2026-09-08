@@ -1,4 +1,4 @@
-import { Navigate, createBrowserRouter, redirect, type RouteObject } from "react-router";
+import { Navigate, createBrowserRouter, redirect, type RouteObject, type LoaderFunctionArgs } from "react-router";
 import { UnauthorizedError, type MeResponse, getMe } from "./api/client";
 import AppShell from "./layout/AppShell";
 import AccountRecovery from "./routes/AccountRecovery";
@@ -17,22 +17,26 @@ import Terms from "./routes/Terms";
 import Studios from "./routes/Studios";
 import TrialExtension from "./routes/TrialExtension";
 import DeviceTransfer from "./routes/DeviceTransfer";
+import Setup from "./routes/Setup";
 
 // The session loader guards every dashboard section: an expired or missing
 // browser session sends the visitor to sign in, while any other API failure
 // surfaces through the shell's error boundary instead of a blank page.
-export async function sessionLoader(): Promise<MeResponse> {
+export async function sessionLoader({ request }: LoaderFunctionArgs): Promise<MeResponse> {
   try {
     return await getMe();
   } catch (error) {
     if (error instanceof UnauthorizedError) {
-      throw redirect("/login");
+      const url = new URL(request.url);
+      throw redirect(`/login?${new URLSearchParams({ next: url.pathname + url.search })}`);
     }
     throw error;
   }
 }
 
 const dashboardSections: RouteObject[] = [
+  { path: "setup", element: <Setup /> },
+  { path: "dashboard", element: <Setup /> },
   { path: "devices", element: <Devices /> },
   { path: "studios", element: <Studios /> },
   { path: "connectors", element: <Connectors /> },
@@ -63,7 +67,7 @@ export function appRoutes(): RouteObject[] {
     { path: "/login", element: <Login /> },
     { path: "/download", element: <Download /> },
     { path: "/enroll", element: <Enroll /> },
-    { path: "*", element: <Navigate to="/devices" replace /> },
+    { path: "*", element: <Navigate to="/dashboard" replace /> },
   ];
 }
 

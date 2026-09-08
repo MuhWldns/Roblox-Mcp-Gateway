@@ -269,7 +269,15 @@ func validateReturnTo(raw string) string {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Fragment != "" || parsed.Path != "/oauth/authorize" {
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Fragment != "" {
+		return ""
+	}
+	switch parsed.Path {
+	case "/oauth/authorize", "/setup", "/dashboard", "/enroll", "/download", "/devices", "/studios", "/connectors", "/license", "/diagnostics", "/admin", "/admin/transfer", "/admin/recovery", "/admin/extension":
+	default:
+		return ""
+	}
+	if parsed.RawPath != "" || strings.ContainsAny(raw, "\\\\#\r\n") || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
 		return ""
 	}
 	if _, err := url.ParseQuery(parsed.RawQuery); err != nil {

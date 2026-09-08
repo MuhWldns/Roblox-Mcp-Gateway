@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate } from "react-router";
+import { Link, Navigate } from "react-router";
 import {
   getDownloadMetadata,
   getMeSnapshot,
@@ -42,7 +42,7 @@ export default function DownloadHero() {
   }, []);
 
   if (denied) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login?next=%2Fdownload" replace />;
   }
   if (failed) {
     return (
@@ -137,6 +137,7 @@ export default function DownloadHero() {
             </a>
             <p className="text-center text-xs text-white/50 m-0">
               Zero admin rights required · Runs per-user · Outbound tunnel only
+            <Link to="/setup" className="inline-flex min-h-11 items-center justify-center w-full mt-4 text-white underline underline-offset-4">Already running Companion? Continue setup</Link>
             </p>
           </div>
         </div>

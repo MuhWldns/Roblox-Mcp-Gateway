@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, useSearchParams } from "react-router";
+import { Link, Navigate, useSearchParams } from "react-router";
 import {
   type EnrollmentClaim,
   type MeResponse,
@@ -109,7 +109,7 @@ export default function EnrollPage() {
   }, [approved]);
 
   if (denied) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to={`/login?${new URLSearchParams({ next: `/enroll?${new URLSearchParams({ code })}` })}`} replace />;
   }
   if (me === null) {
     return <p role="status" className="text-text-muted italic">Loading account…</p>;
@@ -129,6 +129,7 @@ export default function EnrollPage() {
         Check that the computer below is yours. Only approve it if you started this
         setup. Your 14-day trial starts when your first computer finishes connecting.
       </p>
+      <Link to="/setup" className="inline-flex min-h-11 items-center mb-4 underline">Back to setup</Link>
 
       {!approved ? (
         <>
@@ -213,6 +214,7 @@ export default function EnrollPage() {
               Waiting for your computer to finish connecting…
             </p>
           )}
+          <Link to="/setup" className="inline-flex mt-5 min-h-11 items-center rounded-md bg-red text-white px-5 font-semibold">Continue setup</Link>
         </section>
       )}
     </section>

@@ -2,6 +2,8 @@ import { Link, NavLink, Outlet, useLoaderData, useNavigate } from "react-router"
 import { type MeResponse, logout } from "../api/client";
 
 const sections = [
+  { to: "/dashboard", label: "Dashboard" },
+  { to: "/setup", label: "Setup" },
   { to: "/devices", label: "Devices" },
   { to: "/studios", label: "Studios" },
   { to: "/connectors", label: "Connectors" },
@@ -23,7 +25,7 @@ export default function AppShell() {
   }
 
   return (
-    <div className="grid grid-cols-[240px_1fr] grid-rows-[56px_1fr] min-h-screen max-md:grid-cols-[1fr] max-md:grid-rows-[auto_auto_1fr]">
+    <div className="min-h-screen md:pl-[240px]">
       {/* Sidebar */}
       <aside className="bg-navy text-white flex flex-col py-6 fixed top-0 left-0 bottom-0 w-[240px] overflow-y-auto z-10 max-md:static max-md:w-full max-md:flex-row max-md:py-3 max-md:overflow-x-auto">
         <div className="px-5 pb-5 border-b border-navy-light mb-4 max-md:hidden">
@@ -33,7 +35,7 @@ export default function AppShell() {
             </div>
             <div>
               <h1 className="text-base font-bold text-white tracking-tight leading-none m-0">Buildly</h1>
-              <span className="block text-[10px] font-semibold text-text-muted uppercase tracking-wider mt-0.5">BY RBX</span>
+              <span className="block text-[10px] font-semibold text-text-muted uppercase tracking-wider mt-0.5">BY RBX ROYALE</span>
             </div>
           </div>
         </div>

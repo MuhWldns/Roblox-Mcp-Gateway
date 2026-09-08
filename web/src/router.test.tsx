@@ -105,7 +105,7 @@ describe("dashboard shell routing", () => {
 
     await renderShellAt("/devices");
 
-    expect((await screen.findByRole("link", { name: /continue with/i })).getAttribute("href")).toBe("/api/v1/auth/roblox/login");
+    expect((await screen.findByRole("link", { name: /continue with/i })).getAttribute("href")).toBe("/api/v1/auth/roblox/login?next=%2Fdevices");
     expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe("/privacy");
     expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
@@ -133,12 +133,12 @@ describe("dashboard shell routing", () => {
     expect((click.mock.instances[0] as HTMLAnchorElement).getAttribute("href")).toBe(continuation);
   });
 
-  it("keeps the normal authenticated login fallback on download", async () => {
-    installFetch({ [meUrl]: { json: freshMe }, [metadataUrl]: { json: metadata } });
+  it("routes a new authenticated account to setup", async () => {
+    installFetch({ [meUrl]: { json: freshMe }, "GET /api/v1/devices": { json: { devices: [] } }, "GET /api/v1/studios": { json: { studios: [] } }, "GET /api/v1/connectors": { json: { connectors: [] } } });
 
     const router = await renderShellAt("/login");
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/download"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/setup"));
   });
 
   it("renders the authenticated shell with section navigation", async () => {
@@ -288,7 +288,7 @@ describe("dashboard shell routing", () => {
 
     const cta = await screen.findAllByRole("link", { name: "Open dashboard" });
     expect(cta.length).toBeGreaterThan(0);
-    expect(cta[0].getAttribute("href")).toBe("/devices");
+    expect(cta[0].getAttribute("href")).toBe("/dashboard");
   });
 
   it("keeps the privacy policy public and links to the terms", async () => {

@@ -27,16 +27,16 @@ export default function Download() {
 
           <nav className="flex items-center gap-4 text-sm">
             <Link
-              to="/devices"
+              to="/dashboard"
               className="text-white/70 hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5 font-medium no-underline"
             >
               Dashboard
             </Link>
             <Link
-              to="/connectors"
+              to="/setup"
               className="text-white/70 hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5 font-medium no-underline max-sm:hidden"
             >
-              Connectors
+              Setup
             </Link>
           </nav>
         </div>

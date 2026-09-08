@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router";
-import { getMe } from "../api/client";
+import { getMe, UnauthorizedError } from "../api/client";
+import { getSetupDestination } from "../api/setup";
 
 const maxReturnToLength = 4096;
 
@@ -11,7 +12,7 @@ function oauthAuthorizeContinuation(search: string): string {
     candidate.length > maxReturnToLength ||
     !candidate.startsWith("/") ||
     candidate.startsWith("//") ||
-    candidate.includes("#")
+    candidate.includes("#") || candidate.includes("\\")
   ) {
     return "";
   }
@@ -21,7 +22,7 @@ function oauthAuthorizeContinuation(search: string): string {
       target.origin !== window.location.origin ||
       target.username !== "" ||
       target.password !== "" ||
-      target.pathname !== "/oauth/authorize"
+      !["/oauth/authorize", "/setup", "/dashboard", "/enroll", "/download", "/devices", "/studios", "/connectors", "/license", "/diagnostics", "/admin", "/admin/transfer", "/admin/recovery", "/admin/extension"].includes(target.pathname)
     ) {
       return "";
     }
@@ -36,33 +37,40 @@ export default function Login() {
   const returnTo = oauthAuthorizeContinuation(location.search);
   const resumeLink = useRef<HTMLAnchorElement>(null);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [destination, setDestination] = useState("");
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     getMe()
-      .then(() => {
-        if (!cancelled) setAuthenticated(true);
+      .then(async () => {
+        const target = returnTo || await getSetupDestination();
+        if (!cancelled) { setDestination(target); setAuthenticated(true); }
       })
-      .catch(() => {
-        if (!cancelled) setAuthenticated(false);
+      .catch((err) => {
+        if (!cancelled) {
+          if (err instanceof UnauthorizedError) setAuthenticated(false);
+          else setError(true);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [returnTo]);
 
   useEffect(() => {
-    if (authenticated === true && returnTo !== "") {
+    if (authenticated === true && returnTo.startsWith("/oauth/authorize")) {
       resumeLink.current?.click();
     }
   }, [authenticated, returnTo]);
 
   if (authenticated === true) {
-    if (returnTo === "") {
-      return <Navigate to="/download" replace />;
+    if (!returnTo.startsWith("/oauth/authorize")) {
+      return <Navigate to={destination} replace />;
     }
     return <a ref={resumeLink} href={returnTo} hidden aria-hidden="true" />;
   }
+  if (error) return <main className="min-h-screen p-8"><p role="alert">Could not check your account. Try again.</p><button type="button" onClick={() => window.location.reload()}>Retry</button></main>;
   if (authenticated === null) {
     return (
       <main className="flex items-center justify-center min-h-screen bg-navy p-4">
@@ -82,7 +90,7 @@ export default function Login() {
           BY RBX ROYALE
         </span>
         <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-          {returnTo !== ""
+          {returnTo.startsWith("/oauth/authorize")
             ? "Sign in with Roblox to review the requested access and continue connecting your AI assistant."
             : "Use your Roblox account to manage your computers and AI connections."}
         </p>
