@@ -115,7 +115,7 @@ describe("onboarding web flow", () => {
 
     renderAt("/download", <Download />);
 
-    expect(await screen.findByText("Continue to Buildly")).toBeTruthy();
+    expect((await screen.findByRole("link", { name: /continue with/i })).getAttribute("href")).toBe("/api/v1/auth/roblox/login");
   });
 
   it("shows already authenticated users the download page and redirects them away from login", async () => {
@@ -172,7 +172,7 @@ describe("onboarding web flow", () => {
     expect(screen.getByText(/windows/)).toBeTruthy();
     expect(screen.getByText(/1\.4\.2/)).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: "Approve device" }));
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
 
     await waitFor(() => {
       expect(screen.getByTestId("approval-status").textContent).toMatch(/approved/i);
@@ -193,7 +193,7 @@ describe("onboarding web flow", () => {
 
     renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Approve device" }));
+    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
 
     const trial = await screen.findByTestId("trial-state", {}, { timeout: 5000 });
     expect(trial.textContent).toMatch(/free trial active/i);

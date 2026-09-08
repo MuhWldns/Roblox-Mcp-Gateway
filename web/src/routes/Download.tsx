@@ -6,8 +6,8 @@ export default function Download() {
   return (
     <div className="min-h-screen bg-[#0B0F17] text-white flex flex-col font-sans selection:bg-red selection:text-white">
       <Metadata
-        title="Download Buildly Companion — Buildly by RBX"
-        description="Download the Buildly desktop companion. Connect your local Studio to ChatGPT and Claude seamlessly over Model Context Protocol."
+        title="Download Buildly Companion — Buildly by RBX Royale"
+        description="Download Buildly Companion for Windows. Follow the setup guide to connect your computer, Studio project, and AI assistant."
       />
 
       {/* Minimal Top Navigation Header */}
@@ -20,7 +20,7 @@ export default function Download() {
             <div className="flex items-center gap-2">
               <span className="text-base font-bold text-white tracking-tight">Buildly</span>
               <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest bg-white/5 px-2 py-0.5 rounded border border-white/10">
-                BY RBX
+                BY RBX ROYALE
               </span>
             </div>
           </Link>
@@ -51,9 +51,9 @@ export default function Download() {
       <footer className="border-t border-white/10 py-8 bg-[#070A0F]">
         <div className="max-w-[1200px] mx-auto px-6 flex items-center justify-between text-xs text-white/50 max-sm:flex-col max-sm:gap-4 max-sm:items-start">
           <div className="flex items-center gap-3">
-            <span className="font-semibold text-white/70">Buildly by RBX</span>
+            <span className="font-semibold text-white/70">Buildly by RBX Royale</span>
             <span>·</span>
-            <span>Studio AI Gateway</span>
+            <span>Build with AI in Studio</span>
           </div>
           <div className="flex gap-6">
             <Link to="/privacy" className="hover:text-white transition-colors no-underline">Privacy Policy</Link>

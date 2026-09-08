@@ -66,7 +66,7 @@ export default function Login() {
   if (authenticated === null) {
     return (
       <main className="flex items-center justify-center min-h-screen bg-navy p-4">
-        <p role="status" className="text-white/70 text-sm">Loading…</p>
+        <p role="status" className="text-white/70 text-sm">Checking your account…</p>
       </main>
     );
   }
@@ -77,18 +77,20 @@ export default function Login() {
         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red to-red-hover flex items-center justify-center font-extrabold text-white text-xl shadow-md mx-auto mb-4">
           B
         </div>
-        <h1 className="text-2xl font-bold text-navy tracking-tight mb-1">Sign in to Buildly</h1>
+        <h1 className="text-2xl font-bold text-navy tracking-tight mb-1">Sign in to continue.</h1>
         <span className="inline-block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-4 bg-surface-alt px-2 py-0.5 rounded border border-border">
-          BY RBX
+          BY RBX ROYALE
         </span>
         <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-          Connect the official Studio MCP to ChatGPT and Claude seamlessly through your account.
+          {returnTo !== ""
+            ? "Sign in with Roblox to review the requested access and continue connecting your AI assistant."
+            : "Use your Roblox account to manage your computers and AI connections."}
         </p>
         <ol className="list-none p-0 m-0 mb-6 text-left space-y-2">
           {[
-            "Sign in with your account",
-            "Connect your PC via Buildly companion",
-            "Add the MCP connector in ChatGPT or Claude",
+            "Sign in with Roblox",
+            "Connect your computer and open Studio",
+            "Connect ChatGPT or Claude",
           ].map((step, index) => (
             <li key={step} className="flex items-start gap-3 text-sm text-text-secondary">
               <span
@@ -109,7 +111,7 @@ export default function Login() {
           }
           className="w-full px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors min-h-[44px] inline-flex items-center justify-center no-underline"
         >
-          Continue to Buildly
+          Continue with Roblox
         </a>
         <nav aria-label="Legal" className="flex justify-center gap-5 mt-6 text-xs text-text-secondary">
           <Link to="/privacy" className="hover:text-red underline underline-offset-4">Privacy Policy</Link>

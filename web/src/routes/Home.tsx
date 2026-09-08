@@ -5,16 +5,16 @@ import Metadata from "../components/Metadata";
 
 const steps = [
   {
-    title: "1. Authenticate Account",
-    body: "Sign in with your verified creator account. Zero passwords stored, zero hassle.",
+    title: "Sign in to Buildly",
+    body: "Use your Roblox account to manage your computers and AI connections.",
   },
   {
-    title: "2. Run Buildly Companion",
-    body: "Launch Buildly desktop bridge. Outbound-only tunnel connects automatically without opening firewall ports.",
+    title: "Connect your computer",
+    body: "Download and run Buildly Companion on your Windows PC, approve the connection, then open your Studio project.",
   },
   {
-    title: "3. Connect AI Assistants",
-    body: "Link Claude Desktop or ChatGPT to your Buildly MCP gateway and start building in Studio seamlessly.",
+    title: "Connect your AI assistant",
+    body: "Add Buildly to ChatGPT or Claude. Start by asking your assistant to read your project without making changes.",
   },
 ];
 
@@ -40,8 +40,8 @@ export default function Home() {
   return (
     <>
       <Metadata
-        title="Buildly by RBX — Connect AI Assistants to Studio"
-        description="Supercharge your workflow. Connect Claude and ChatGPT to Studio through Buildly MCP Gateway."
+        title="Buildly by RBX Royale — Bring your ideas to Studio, with AI"
+        description="Connect ChatGPT or Claude to your Studio project. Get help understanding your project, writing scripts, and making changes with AI."
       />
       <div className="min-h-screen bg-surface flex flex-col">
         <header className="bg-white border-b border-border">
@@ -53,7 +53,7 @@ export default function Home() {
               <div>
                 <span className="text-lg font-bold text-navy tracking-tight align-middle">Buildly</span>
                 <span className="ml-2 text-[10px] font-bold text-text-muted uppercase tracking-wider align-middle bg-surface-alt px-1.5 py-0.5 rounded border border-border">
-                  BY RBX
+                  BY RBX ROYALE
                 </span>
               </div>
             </div>
@@ -78,11 +78,11 @@ export default function Home() {
         <main className="flex-1">
           <section className="max-w-[820px] mx-auto px-4 pt-16 pb-12 text-center max-md:pt-10">
             <h1 className="text-4xl sm:text-5xl font-extrabold text-navy tracking-tight mb-4">
-              Control Studio from <span className="text-red">ChatGPT & Claude</span>
+              Bring your ideas to Studio, <span className="text-red">with AI.</span>
             </h1>
             <p className="text-lg text-text-secondary mb-8 max-w-[640px] mx-auto">
-              Buildly connects the official Studio MCP to your AI assistant — safely,
-              outbound-only, without port forwarding.
+              Connect ChatGPT or Claude to your Studio project. Get help understanding
+              your project, writing scripts, and making changes with AI.
             </p>
             <div className="flex items-center justify-center gap-3 flex-wrap">
               {signedIn ? (
@@ -97,7 +97,7 @@ export default function Home() {
                   to="/login"
                   className="inline-flex items-center px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors no-underline min-h-[44px]"
                 >
-                  Sign in to Buildly
+                  Start setup
                 </Link>
               )}
               <a
@@ -125,14 +125,14 @@ export default function Home() {
               ))}
             </ol>
             <p className="text-center text-sm text-text-muted mt-8 mb-0">
-              Outbound-only. Buildly never opens ports on your PC.
+              You’ll need a Windows PC with Studio and access to custom apps or connectors in ChatGPT or Claude.
             </p>
           </section>
         </main>
 
         <footer className="border-t border-border bg-white">
           <div className="max-w-[960px] mx-auto px-4 h-14 flex items-center justify-between text-xs text-text-secondary">
-            <span>Buildly BY RBX</span>
+            <span>Buildly by RBX Royale</span>
             <nav aria-label="Legal" className="flex gap-5">
               <Link to="/privacy" className="hover:text-red underline underline-offset-4">Privacy Policy</Link>
               <Link to="/terms" className="hover:text-red underline underline-offset-4">Terms of Service</Link>

@@ -72,13 +72,13 @@ export default function DownloadHero() {
         <div className="max-w-[640px]">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white/80 text-xs font-semibold tracking-wide mb-4">
             <span className="w-2 h-2 rounded-full bg-red animate-pulse" />
-            <span>Official MCP Bridge</span>
+            <span>Buildly Companion for Windows</span>
           </div>
           <h1 id="download-hero-title" className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white mb-3">
             Download Buildly Companion
           </h1>
           <p className="text-base sm:text-lg text-white/70 leading-relaxed m-0">
-            Connect your local Studio instance to ChatGPT and Claude over secure, outbound-only WebSockets.
+            Run Companion on your computer to connect ChatGPT or Claude to your Studio project.
           </p>
         </div>
 
@@ -106,7 +106,7 @@ export default function DownloadHero() {
               </span>
             </div>
             <span className="text-[11px] text-emerald-400 font-medium bg-emerald-400/10 border border-emerald-400/20 px-2.5 py-0.5 rounded-full">
-              Verified Build
+              Release download
             </span>
           </div>
 
@@ -167,7 +167,7 @@ export default function DownloadHero() {
                 🛡️
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white mb-1">Safe Evaluation</h4>
+                <h4 className="text-sm font-bold text-white mb-1">Your trial starts when you connect</h4>
                 <p className="text-xs text-white/70 leading-relaxed m-0">
                   Downloading does not start your free trial. Your 14-day trial begins
                   only when you connect and approve your first device.
@@ -182,10 +182,10 @@ export default function DownloadHero() {
       <div className="pt-8 border-t border-white/10">
         <div className="mb-6">
           <h3 className="text-xl font-bold text-white tracking-tight">
-            Getting Started in 4 Steps
+            Set up Buildly for your project
           </h3>
           <p className="text-sm text-white/60 m-0">
-            Follow this simple walkthrough to pair your local Studio with Claude and ChatGPT.
+            Connect your computer, open Studio, then connect your AI assistant. Detailed ChatGPT instructions follow below.
           </p>
         </div>
 
@@ -195,9 +195,9 @@ export default function DownloadHero() {
               <div className="w-7 h-7 rounded-lg bg-white/10 text-white font-mono text-xs font-bold flex items-center justify-center mb-3">
                 01
               </div>
-              <h4 className="text-sm font-bold text-white mb-1.5">Run Executable</h4>
+              <h4 className="text-sm font-bold text-white mb-1.5">Run Companion</h4>
               <p className="text-xs text-white/60 leading-relaxed m-0">
-                Double-click the downloaded executable to start the automatic smart setup wizard.
+                Open the downloaded file on your Windows PC. Follow the setup prompts and keep Companion running. If it cannot find the Studio MCP launcher, it will ask for the path to mcp.bat.
               </p>
             </div>
           </div>
@@ -207,9 +207,9 @@ export default function DownloadHero() {
               <div className="w-7 h-7 rounded-lg bg-white/10 text-white font-mono text-xs font-bold flex items-center justify-center mb-3">
                 02
               </div>
-              <h4 className="text-sm font-bold text-white mb-1.5">Approve Browser</h4>
+              <h4 className="text-sm font-bold text-white mb-1.5">Approve your computer</h4>
               <p className="text-xs text-white/60 leading-relaxed m-0">
-                Your default browser will pop up to link this machine to your dashboard account.
+                In the browser window that opens, sign in with Roblox, check the computer name, and approve it. Only approve a computer if you started the setup.
               </p>
             </div>
           </div>
@@ -219,9 +219,9 @@ export default function DownloadHero() {
               <div className="w-7 h-7 rounded-lg bg-white/10 text-white font-mono text-xs font-bold flex items-center justify-center mb-3">
                 03
               </div>
-              <h4 className="text-sm font-bold text-white mb-1.5">Launch Studio</h4>
+              <h4 className="text-sm font-bold text-white mb-1.5">Open your project</h4>
               <p className="text-xs text-white/60 leading-relaxed m-0">
-                Open your project in Studio. Buildly Companion detects and hooks your active instance.
+                Open your project in Studio on the same computer. Keep Companion running and check the Studios page to see whether your project is detected.
               </p>
             </div>
           </div>
@@ -231,7 +231,7 @@ export default function DownloadHero() {
               <div className="w-7 h-7 rounded-lg bg-white/10 text-white font-mono text-xs font-bold flex items-center justify-center mb-3">
                 04
               </div>
-              <h4 className="text-sm font-bold text-white mb-1.5">Connect AI</h4>
+              <h4 className="text-sm font-bold text-white mb-1.5">Connect your AI assistant</h4>
               <p className="text-xs text-white/60 leading-relaxed m-0">
                 Follow the ChatGPT walkthrough below to add Buildly, approve access, and use it in a new chat.
               </p>

@@ -33,7 +33,7 @@ export default function EnrollPage() {
       const pending = await getEnrollmentClaim(value);
       setClaim(pending);
     } catch {
-      setError("Pairing code not found. Check the code shown in Buildly companion.");
+      setError("We couldn’t load this pairing code. Check the code in Buildly Companion and try again.");
     } finally {
       setBusy(false);
     }
@@ -46,7 +46,7 @@ export default function EnrollPage() {
       await approveEnrollment(code);
       setApproved(true);
     } catch {
-      setError("Approval failed. Please try again.");
+      setError("We couldn’t approve this computer. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -122,12 +122,12 @@ export default function EnrollPage() {
       className="animate-[pageEnter_200ms_ease]"
     >
       <h2 id="enroll-title" className="text-xl font-semibold text-navy mb-1">
-        Connect a device
+        Connect this computer?
       </h2>
       <p className="text-text-secondary mb-2">Signed in as {me.display_name}</p>
       <p className="text-text-secondary mb-6">
-        Review the device details before granting access. Your one-time 14-day
-        trial starts only after Buildly finishes connecting.
+        Check that the computer below is yours. Only approve it if you started this
+        setup. Your 14-day trial starts when your first computer finishes connecting.
       </p>
 
       {!approved ? (
@@ -157,7 +157,7 @@ export default function EnrollPage() {
                 disabled={busy || code.trim().length === 0}
                 className="px-4 py-2 text-sm font-medium bg-navy text-white rounded-md hover:bg-navy-light disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Show device
+                Show computer
               </button>
             </div>
           </form>
@@ -170,13 +170,13 @@ export default function EnrollPage() {
 
           {claim !== null ? (
             <section aria-label="Device requesting enrollment" className="bg-white border border-border rounded-lg p-6">
-              <h3 className="text-base font-semibold text-navy mb-4">Confirm this device</h3>
+              <h3 className="text-base font-semibold text-navy mb-4">Review this computer</h3>
               <dl className="grid grid-cols-[minmax(0,8rem)_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm mb-5">
-                <dt className="text-text-muted">Hostname</dt>
+                <dt className="text-text-muted">Computer name</dt>
                 <dd data-testid="device-hostname" className="text-navy font-semibold break-words">{claim.hostname}</dd>
                 <dt className="text-text-muted">Platform</dt>
                 <dd data-testid="device-platform" className="text-navy break-words">{claim.platform}</dd>
-                <dt className="text-text-muted">Bridge version</dt>
+                <dt className="text-text-muted">Companion version</dt>
                 <dd data-testid="device-bridge-version" className="text-navy break-words">{claim.bridge_version}</dd>
                 <dt className="text-text-muted">Request expires</dt>
                 <dd data-testid="device-started-at" className="text-navy break-words">
@@ -189,7 +189,7 @@ export default function EnrollPage() {
                 disabled={busy}
                 className="px-4 py-2 text-sm font-medium bg-red text-white rounded-md hover:bg-red-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Approve device
+                Approve computer
               </button>
             </section>
           ) : null}
@@ -200,10 +200,9 @@ export default function EnrollPage() {
           aria-label="Enrollment approval result"
           className="bg-white border border-border rounded-lg p-6"
         >
-          <h3 className="text-base font-semibold text-navy mb-2">Device approved</h3>
+          <h3 className="text-base font-semibold text-navy mb-2">Computer approved</h3>
           <p className="text-text-secondary mb-4">
-            Buildly companion will connect automatically. Keep it running while this
-            page waits for the first binding.
+            Keep Buildly Companion running on your computer to finish connecting.
           </p>
           {me.trial?.active ? (
             <p data-testid="trial-state" className="font-semibold text-navy">
@@ -211,7 +210,7 @@ export default function EnrollPage() {
             </p>
           ) : (
             <p role="status" className="text-text-muted italic">
-              Waiting for your device to finish connecting…
+              Waiting for your computer to finish connecting…
             </p>
           )}
         </section>
