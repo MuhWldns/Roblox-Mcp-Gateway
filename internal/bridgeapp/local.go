@@ -308,6 +308,8 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 	if err := json.Unmarshal(result, &payload); err != nil {
 		return "", nil, fmt.Errorf("decode tools/list result: %w", err)
 	}
+	var fallbackName string
+	var fallbackArgs map[string]any
 	for _, tool := range payload.Tools {
 		if tool.Name == "" || !tool.Annotations.ReadOnlyHint || tool.InputSchema == nil {
 			continue
@@ -377,11 +379,15 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 		if !valid {
 			continue
 		}
+		hasRequired := false
+		requiredCount := 0
 		if required, exists := tool.InputSchema["required"]; exists {
+			hasRequired = true
 			requiredValues, ok := required.([]any)
 			if !ok {
 				continue
 			}
+			requiredCount = len(requiredValues)
 			for _, raw := range requiredValues {
 				key, ok := raw.(string)
 				if !ok {
@@ -407,9 +413,18 @@ func findReadOnlyTool(result json.RawMessage) (string, map[string]any, error) {
 				}
 			}
 		}
-		if valid {
-			return tool.Name, args, nil
+		if !valid {
+			continue
 		}
+		if len(propertyMap) == 0 && (!hasRequired || requiredCount == 0) {
+			return tool.Name, map[string]any{}, nil
+		}
+		if fallbackName == "" {
+			fallbackName, fallbackArgs = tool.Name, args
+		}
+	}
+	if fallbackName != "" {
+		return fallbackName, fallbackArgs, nil
 	}
 	return "", nil, errors.New("tools/list returned no schema-compatible read-only tool")
 }

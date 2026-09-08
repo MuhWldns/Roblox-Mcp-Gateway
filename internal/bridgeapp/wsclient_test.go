@@ -1201,10 +1201,15 @@ func TestRemoteBearerHeaderDialing(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
 		readCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		ws.CloseRead(readCtx)
+		for {
+			_, _, err := ws.Read(readCtx)
+			if err != nil {
+				break
+			}
+		}
+		defer ws.CloseNow()
 	}))
 	t.Cleanup(server.Close)
 

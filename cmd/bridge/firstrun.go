@@ -66,7 +66,7 @@ func runSmart(ctx context.Context) {
 		stdout:      os.Stdout,
 		openBrowser: openInDefaultBrowser,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "RobloxBridge failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Buildly failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Press Enter to close this window…")
 		fmt.Scanln()
 		os.Exit(1)
@@ -94,7 +94,7 @@ func runSmartFlow(ctx context.Context, deps firstRunDeps) error {
 			return err
 		}
 	} else {
-		fmt.Fprintf(deps.stdout, "RobloxBridge — device %s\n", config.DeviceID)
+		fmt.Fprintf(deps.stdout, "⚡ Buildly Companion — Device: %s\n", config.DeviceID)
 	}
 
 	store, err := bridgeapp.NewFileCredentialStore(credentialPath)
@@ -141,9 +141,16 @@ func runSmartFlow(ctx context.Context, deps firstRunDeps) error {
 // Previously saved fields are reused when valid, so a wizard re-run after a
 // failed enrollment never discards operator input.
 func runWizard(ctx context.Context, deps firstRunDeps, configPath, credentialPath string, saved bridgeconfig.Config) (bridgeconfig.Config, error) {
-	fmt.Fprintln(deps.stdout, "RobloxBridge first-time setup")
-	fmt.Fprintln(deps.stdout, "=============================")
-
+	fmt.Fprintln(deps.stdout, `
+    ____        _ _     _ _       
+   | __ ) _   _(_) | __| | |_   _ 
+   |  _ \| | | | | |/ _`+"`"+`| | | | |
+   | |_) | |_| | | | (_| | | |_| |
+   |____/ \__,_|_|_|\__,_|_|\__, |
+                            |___/ 
+   ⚡ Buildly by RBX — Studio AI Gateway v1.0.0
+   ==============================================`)
+	fmt.Fprintln(deps.stdout, "")
 	gatewayURL := saved.GatewayURL
 	if gatewayURL == "" {
 		gatewayURL = strings.TrimSpace(os.Getenv("BRIDGE_GATEWAY_URL"))
@@ -160,10 +167,10 @@ func runWizard(ctx context.Context, deps firstRunDeps, configPath, credentialPat
 		detected := detectLauncher()
 		if detected != "" {
 			launcher = detected
-			fmt.Fprintf(deps.stdout, "Roblox MCP launcher found: %s\n", launcher)
+			fmt.Fprintf(deps.stdout, " [✓] Studio MCP launcher detected: %s\n", launcher)
 		} else {
-			fmt.Fprintln(deps.stdout, "The official Roblox Studio MCP launcher was not found automatically.")
-			fmt.Fprintln(deps.stdout, "Enter the full path to the launcher (for example C:\\Users\\me\\AppData\\Local\\Roblox\\mcp.bat):")
+			fmt.Fprintln(deps.stdout, " [!] Studio MCP launcher was not found automatically.")
+			fmt.Fprintln(deps.stdout, " Enter the full path to mcp.bat:")
 			line, err := promptLine(deps.stdin, deps.stdout)
 			if err != nil {
 				return bridgeconfig.Config{}, fmt.Errorf("read launcher path: %w", err)
@@ -197,7 +204,7 @@ func runWizard(ctx context.Context, deps firstRunDeps, configPath, credentialPat
 	if err := runEnrollment(ctx, deps, gatewayURL, deviceID, credentialPath); err != nil {
 		return bridgeconfig.Config{}, err
 	}
-	fmt.Fprintln(deps.stdout, "Setup complete. This PC is now linked to your RobloxKit account.")
+	fmt.Fprintln(deps.stdout, "\n [✓] Setup complete! This PC is now linked to your Buildly by RBX account.")
 	return pending, nil
 }
 

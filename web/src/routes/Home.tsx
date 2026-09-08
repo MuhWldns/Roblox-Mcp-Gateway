@@ -5,16 +5,16 @@ import Metadata from "../components/Metadata";
 
 const steps = [
   {
-    title: "Sign in with Roblox",
-    body: "One click with your licensed Roblox account. No passwords stored, no separate signup.",
+    title: "1. Authenticate Account",
+    body: "Sign in with your verified creator account. Zero passwords stored, zero hassle.",
   },
   {
-    title: "Connect your PC",
-    body: "Install RobloxBridge and enter its pairing code on the dashboard. Outbound-only — no ports opened.",
+    title: "2. Run Buildly Companion",
+    body: "Launch Buildly desktop bridge. Outbound-only tunnel connects automatically without opening firewall ports.",
   },
   {
-    title: "Add the MCP connector",
-    body: "Point ChatGPT or Claude at your RobloxKit connector and start scripting Studio with AI.",
+    title: "3. Connect AI Assistants",
+    body: "Link Claude Desktop or ChatGPT to your Buildly MCP gateway and start building in Studio seamlessly.",
   },
 ];
 
@@ -40,18 +40,23 @@ export default function Home() {
   return (
     <>
       <Metadata
-        title="RobloxKit — ChatGPT & Claude for Roblox Studio"
-        description="Connect the official Roblox Studio MCP to ChatGPT and Claude. Outbound-only Bridge, no port forwarding, 14-day free trial."
+        title="Buildly by RBX — Connect AI Assistants to Studio"
+        description="Supercharge your workflow. Connect Claude and ChatGPT to Studio through Buildly MCP Gateway."
       />
       <div className="min-h-screen bg-surface flex flex-col">
         <header className="bg-white border-b border-border">
           <div className="max-w-[960px] mx-auto px-4 h-14 flex items-center justify-between">
-            <p className="m-0 leading-none">
-              <span className="text-lg font-bold text-navy tracking-tight align-middle">RobloxKit</span>
-              <span className="ml-2 text-[11px] font-medium text-text-muted uppercase tracking-wider align-middle">
-                BY RBX
-              </span>
-            </p>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red to-red-hover flex items-center justify-center font-bold text-white shadow-sm">
+                B
+              </div>
+              <div>
+                <span className="text-lg font-bold text-navy tracking-tight align-middle">Buildly</span>
+                <span className="ml-2 text-[10px] font-bold text-text-muted uppercase tracking-wider align-middle bg-surface-alt px-1.5 py-0.5 rounded border border-border">
+                  BY RBX
+                </span>
+              </div>
+            </div>
             {signedIn ? (
               <Link
                 to="/devices"
@@ -72,12 +77,12 @@ export default function Home() {
 
         <main className="flex-1">
           <section className="max-w-[820px] mx-auto px-4 pt-16 pb-12 text-center max-md:pt-10">
-            <h1 className="text-4xl font-bold text-navy tracking-tight mb-4 max-md:text-3xl">
-              Control Roblox Studio from ChatGPT and Claude
+            <h1 className="text-4xl sm:text-5xl font-extrabold text-navy tracking-tight mb-4">
+              Control Studio from <span className="text-red">ChatGPT & Claude</span>
             </h1>
             <p className="text-lg text-text-secondary mb-8 max-w-[640px] mx-auto">
-              RobloxKit bridges the official Roblox Studio MCP to your AI
-              assistant — safely, without port forwarding.
+              Buildly connects the official Studio MCP to your AI assistant — safely,
+              outbound-only, without port forwarding.
             </p>
             <div className="flex items-center justify-center gap-3 flex-wrap">
               {signedIn ? (
@@ -92,7 +97,7 @@ export default function Home() {
                   to="/login"
                   className="inline-flex items-center px-6 py-3 text-base font-semibold bg-red text-white rounded-md hover:bg-red-hover transition-colors no-underline min-h-[44px]"
                 >
-                  Sign in with Roblox
+                  Sign in to Buildly
                 </Link>
               )}
               <a
@@ -104,7 +109,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section id="how" aria-label="How RobloxKit works" className="max-w-[960px] mx-auto px-4 pb-12">
+          <section id="how" aria-label="How Buildly works" className="max-w-[960px] mx-auto px-4 pb-12">
             <ol className="list-none p-0 m-0 grid gap-4 sm:grid-cols-3">
               {steps.map((step, index) => (
                 <li key={step.title} className="bg-white border border-border rounded-lg p-6">
@@ -120,14 +125,14 @@ export default function Home() {
               ))}
             </ol>
             <p className="text-center text-sm text-text-muted mt-8 mb-0">
-              Outbound-only. RobloxBridge never opens ports on your PC.
+              Outbound-only. Buildly never opens ports on your PC.
             </p>
           </section>
         </main>
 
         <footer className="border-t border-border bg-white">
           <div className="max-w-[960px] mx-auto px-4 h-14 flex items-center justify-between text-xs text-text-secondary">
-            <span>RobloxKit BY RBX</span>
+            <span>Buildly BY RBX</span>
             <nav aria-label="Legal" className="flex gap-5">
               <Link to="/privacy" className="hover:text-red underline underline-offset-4">Privacy Policy</Link>
               <Link to="/terms" className="hover:text-red underline underline-offset-4">Terms of Service</Link>

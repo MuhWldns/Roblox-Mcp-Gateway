@@ -6,7 +6,10 @@ import DownloadHeroSection from "../routes/DownloadHero";
 export default function Download() {
   return (
     <>
-      <Metadata title="Download RobloxBridge" description="Get a free trial of RobloxBridge — the desktop app that connects your local Roblox Studio to the RobloxKit gateway, so ChatGPT and Claude can control your Studio through MCP." />
+      <Metadata
+        title="Download Buildly Companion — Buildly by RBX"
+        description="Download the Buildly desktop companion. Connect your local Studio to ChatGPT and Claude seamlessly over Model Context Protocol."
+      />
       <DownloadHeroSection />
     </>
   );

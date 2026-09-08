@@ -8,19 +8,21 @@ package mcpgateway
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"robloxkit/internal/audit"
 	"robloxkit/internal/bridgehub"
@@ -29,6 +31,17 @@ import (
 	"robloxkit/internal/mcpoauth"
 	"robloxkit/pkg/bridgeproto"
 )
+
+//go:embed official_tools.json
+var officialToolsJSON []byte
+
+var officialToolsList []*mcp.Tool
+
+func init() {
+	if err := json.Unmarshal(officialToolsJSON, &officialToolsList); err != nil {
+		panic(fmt.Errorf("decode official StudioMCP catalog: %w", err))
+	}
+}
 
 // Configuration defaults for the gateway.
 const (
@@ -229,6 +242,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		SessionTimeout:      cfg.SessionTimeout,
 		MaxRequestBodyBytes: cfg.MaxRequestBytes,
 		JSONResponse:        true,
+		Stateless:           true,
 	})
 	return gateway, nil
 }
@@ -245,7 +259,46 @@ func (g *Gateway) Handler() http.Handler {
 		ResourceMetadataURL: g.metadataURL,
 	})
 	authenticated := bearerAuth(g.admission(g.sdk))
-	return g.withCorrelationHeader(g.originGate(g.bearerPresence(authenticated)))
+	core := g.withCorrelationHeader(g.originGate(g.bearerPresence(authenticated)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		// OpenAI ChatGPT sends Mcp-Protocol-Version: 2026-07-28 but omits
+		// io.modelcontextprotocol/protocolVersion in params._meta on tools/call.
+		// Go SDK requires it in _meta if header is 2026-07-28; inject it so
+		// Go SDK does not reject the request with -32602 invalid params.
+		if len(bodyBytes) > 0 {
+			var rawMap map[string]any
+			if err := json.Unmarshal(bodyBytes, &rawMap); err == nil {
+				if params, ok := rawMap["params"].(map[string]any); ok {
+					meta, _ := params["_meta"].(map[string]any)
+					if meta == nil {
+						meta = make(map[string]any)
+					}
+					protoVer := r.Header.Get("Mcp-Protocol-Version")
+					if protoVer == "" {
+						protoVer = "2026-07-28"
+					}
+					if _, has := meta["io.modelcontextprotocol/protocolVersion"]; !has {
+						meta["io.modelcontextprotocol/protocolVersion"] = protoVer
+						params["_meta"] = meta
+						rawMap["params"] = params
+						if modified, err := json.Marshal(rawMap); err == nil {
+							bodyBytes = modified
+						}
+					}
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		recorder := httptest.NewRecorder()
+		core.ServeHTTP(recorder, r)
+		for k, v := range recorder.Header() {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(recorder.Code)
+		respBody := recorder.Body.Bytes()
+		_, _ = w.Write(respBody)
+	})
 }
 
 // HandleEnvelope is the hub OnEnvelope hook: responses resolve their
@@ -285,35 +338,26 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}()
 		},
 	})
-	type ToolArgs struct {
-		Path      string `json:"path,omitempty" jsonschema:"description=Workspace or script path"`
-		Script    string `json:"script,omitempty" jsonschema:"description=Luau code or script content"`
-		Name      string `json:"name,omitempty" jsonschema:"description=Instance name"`
-		ClassName string `json:"className,omitempty" jsonschema:"description=Roblox class name"`
-		Text      string `json:"text,omitempty" jsonschema:"description=Command text or argument"`
-	}
-	for toolName, requiredScope := range officialToolScopes {
-		name := toolName
-		scope := requiredScope
-		mcp.AddTool(server, &mcp.Tool{
-			Name:        name,
-			Description: "Roblox Studio MCP tool: " + name,
-		}, func(ctx context.Context, req *mcp.CallToolRequest, args ToolArgs) (*mcp.CallToolResult, any, error) {
+	// Register only tools captured from the official StudioMCP catalog.
+	for _, def := range officialToolsList {
+		name := def.Name
+		scope, _ := officialToolScopes[name]
+
+		toolObj := def
+		server.AddTool(toolObj, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			principal, err := g.reauthorize(ctx, digest)
 			if err != nil {
-				return nil, nil, sessionDeniedError()
+				return nil, sessionDeniedError()
 			}
 			if !scopeAllowed(principal.Grant.Scopes, scope) && !scopeAllowed(principal.Grant.Scopes, mcpoauth.ScopeConnect) {
-				return nil, nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
+				return nil, &jsonrpc.Error{Code: codeScopeDenied, Message: "insufficient scope"}
 			}
-			paramsRaw, _ := json.Marshal(map[string]any{
-				"name":      req.Params.Name,
-				"arguments": req.Params.Arguments,
-			})
+
+			paramsRaw := marshalParams(req.Params)
 			response, trace, err := g.relay.CallDetailed(ctx, sessionIDOf(req), principal.Grant,
 				methodCallTool, paramsRaw)
 			if err != nil {
-				return nil, nil, relayError(err)
+				return nil, relayError(err)
 			}
 			result, wireErr := parseRelayResponse(response)
 			outcome := "success"
@@ -322,17 +366,17 @@ func (g *Gateway) newSessionServer(r *http.Request) *mcp.Server {
 			}
 			g.recordToolUsage(trace, principal.Grant, outcome)
 			if wireErr != nil {
-				return nil, nil, wireErr
+				return nil, wireErr
 			}
 			var callResult mcp.CallToolResult
 			if err := json.Unmarshal(result, &callResult); err != nil {
-				return nil, nil, sanitizedInternalError()
+				return nil, sanitizedInternalError()
 			}
 			g.recordToolSuccess(ctx, trace, principal.Grant, req.Params.Name)
-			return &callResult, nil, nil
+			return &callResult, nil
 		})
 	}
-	server.AddReceivingMiddleware(g.sessionMiddleware(digest))
+
 	return server
 }
 

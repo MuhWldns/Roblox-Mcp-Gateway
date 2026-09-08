@@ -55,8 +55,8 @@ export default function Studios() {
       {studios !== null && studios.length === 0 ? (
         <div className="text-center py-12 px-6 bg-white border-2 border-dashed border-border rounded-lg">
           <p className="text-text-muted">
-            No Studio sessions yet. Open Roblox Studio while RobloxBridge is
-            connected and a session appears here.
+            No Studio sessions yet. Open Studio while Buildly companion is
+            connected and a session will appear here automatically.
           </p>
         </div>
       ) : null}

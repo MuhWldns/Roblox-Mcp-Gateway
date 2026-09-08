@@ -17,39 +17,68 @@ const ToolScopeVersion = 1
 // to the connector scope a grant must carry to see and call them. Names are
 // the official snake_case identifiers; anything absent is default-deny.
 var officialToolScopes = map[string]string{
-	// Read-only inspection.
+	// Studio Discovery & State
+	"list_roblox_studios": mcpoauth.ScopeStudioRead,
+	"get_studio_state":    mcpoauth.ScopeStudioRead,
+	"get_console_output":  mcpoauth.ScopeStudioRead,
+
+	// Game Tree & Instances
+	"search_game_tree": mcpoauth.ScopeStudioRead,
+	"inspect_instance": mcpoauth.ScopeStudioRead,
+
+	// Scripts
+	"script_read":   mcpoauth.ScopeStudioRead,
+	"script_search": mcpoauth.ScopeStudioRead,
+	"script_grep":   mcpoauth.ScopeStudioRead,
+	"multi_edit":    mcpoauth.ScopeStudioEdit,
+	"execute_luau":  mcpoauth.ScopeStudioExec,
+
+	// Playtest & Navigation
+	"start_stop_play":      mcpoauth.ScopeStudioPlay,
+	"character_navigation": mcpoauth.ScopeStudioPlay,
+	"user_mouse_input":     mcpoauth.ScopeStudioInput,
+	"user_keyboard_input":  mcpoauth.ScopeStudioInput,
+
+	// Assets, Images & Generation
+	"search_asset":              mcpoauth.ScopeStudioAsset,
+	"insert_asset":              mcpoauth.ScopeStudioAsset,
+	"upload_image":              mcpoauth.ScopeStudioAsset,
+	"store_image":               mcpoauth.ScopeStudioAsset,
+	"generate_mesh":             mcpoauth.ScopeStudioAsset,
+	"segment_mesh":              mcpoauth.ScopeStudioAsset,
+	"generate_texture":          mcpoauth.ScopeStudioAsset,
+	"generate_material":         mcpoauth.ScopeStudioAsset,
+	"generate_procedural_model": mcpoauth.ScopeStudioAsset,
+
+	// Assistant Skills, Jobs, Subagents & Docs
+	"skill":             mcpoauth.ScopeStudioRead,
+	"subagent":          mcpoauth.ScopeStudioRead,
+	"http_get":          mcpoauth.ScopeStudioRead,
+	"screen_capture":    mcpoauth.ScopeStudioRead,
+	"run_as_job":        mcpoauth.ScopeStudioAsset,
+	"wait_job_finished": mcpoauth.ScopeStudioAsset,
+
+	// Legacy aliases mapped for backward compatibility
 	"get_instance_tree":       mcpoauth.ScopeStudioRead,
 	"get_instance_properties": mcpoauth.ScopeStudioRead,
 	"get_selected_instances":  mcpoauth.ScopeStudioRead,
 	"get_script_content":      mcpoauth.ScopeStudioRead,
-	"get_studio_state":        mcpoauth.ScopeStudioRead,
 	"query_instances":         mcpoauth.ScopeStudioRead,
-
-	// Place and script editing.
 	"set_instance_properties": mcpoauth.ScopeStudioEdit,
 	"set_script_content":      mcpoauth.ScopeStudioEdit,
 	"create_script":           mcpoauth.ScopeStudioEdit,
 	"insert_instance":         mcpoauth.ScopeStudioEdit,
 	"delete_instance":         mcpoauth.ScopeStudioEdit,
 	"rename_instance":         mcpoauth.ScopeStudioEdit,
-
-	// Playtest lifecycle.
-	"run_playtest":       mcpoauth.ScopeStudioPlay,
-	"stop_playtest":      mcpoauth.ScopeStudioPlay,
-	"get_playtest_state": mcpoauth.ScopeStudioPlay,
-
-	// Simulated input during playtests.
-	"send_playtest_input": mcpoauth.ScopeStudioInput,
-	"send_input":          mcpoauth.ScopeStudioInput,
-
-	// Asset pipeline operations.
-	"insert_asset": mcpoauth.ScopeStudioAsset,
-	"upload_asset": mcpoauth.ScopeStudioAsset,
-	"get_asset":    mcpoauth.ScopeStudioAsset,
-
-	// Script execution.
-	"execute_lua": mcpoauth.ScopeStudioExec,
-	"run_script":  mcpoauth.ScopeStudioExec,
+	"run_playtest":            mcpoauth.ScopeStudioPlay,
+	"stop_playtest":           mcpoauth.ScopeStudioPlay,
+	"get_playtest_state":      mcpoauth.ScopeStudioPlay,
+	"send_playtest_input":     mcpoauth.ScopeStudioInput,
+	"send_input":              mcpoauth.ScopeStudioInput,
+	"upload_asset":            mcpoauth.ScopeStudioAsset,
+	"get_asset":               mcpoauth.ScopeStudioAsset,
+	"execute_lua":             mcpoauth.ScopeStudioExec,
+	"run_script":              mcpoauth.ScopeStudioExec,
 }
 
 // Policy answers which scope a tool requires. The zero value is a complete

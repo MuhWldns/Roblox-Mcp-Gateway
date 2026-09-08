@@ -173,7 +173,7 @@ export default function Devices() {
           <p className="text-text-muted mb-4">
             No devices yet.{" "}
             <Link to="/download" className="text-red hover:text-red-hover font-medium">
-              Download RobloxBridge
+              Download Buildly Companion
             </Link>{" "}
             and connect your first PC — connecting is what starts your free trial.
           </p>
@@ -342,7 +342,7 @@ export default function Devices() {
           body={
             <>
               <p>
-                Revoking <strong>{revoking.name}</strong> disconnects RobloxBridge
+                Revoking <strong>{revoking.name}</strong> disconnects Buildly
                 immediately and permanently disables this device's credential.
               </p>
               <p data-testid="revoke-slot-warning">

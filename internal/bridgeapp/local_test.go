@@ -502,6 +502,17 @@ func TestFindReadOnlyToolRejectsIncompatibleEnumAndUsesCompatibleTool(t *testing
 	}
 }
 
+func TestFindReadOnlyToolPrefersZeroArgumentCandidate(t *testing.T) {
+	result := json.RawMessage(`{"tools":[{"name":"search_game_tree","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","required":["studio_id"],"properties":{"studio_id":{"type":"string"}}}},{"name":"list_roblox_studios","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","properties":{}}}]}`)
+	name, args, err := findReadOnlyTool(result)
+	if err != nil {
+		t.Fatalf("findReadOnlyTool() error = %v", err)
+	}
+	if name != "list_roblox_studios" || len(args) != 0 {
+		t.Fatalf("selected tool = %q args = %#v, want zero-argument list_roblox_studios", name, args)
+	}
+}
+
 func TestFindReadOnlyToolRejectsMalformedAndUnsupportedRootSchemas(t *testing.T) {
 	result := json.RawMessage(`{"tools":[{"name":"required-object","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","required":{},"properties":{}}},{"name":"min-properties","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","minProperties":1,"properties":{}}},{"name":"non-object-schema","annotations":{"readOnlyHint":true},"inputSchema":"bad"}]}`)
 	if name, _, err := findReadOnlyTool(result); err == nil || name != "" {

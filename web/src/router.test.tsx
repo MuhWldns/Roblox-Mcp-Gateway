@@ -105,7 +105,7 @@ describe("dashboard shell routing", () => {
 
     await renderShellAt("/devices");
 
-    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue to Buildly")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("href")).toBe("/privacy");
     expect(screen.getByRole("link", { name: "Terms of Service" }).getAttribute("href")).toBe("/terms");
   });
@@ -117,7 +117,7 @@ describe("dashboard shell routing", () => {
 
     await renderShellAt(`/login?next=${encodeURIComponent(continuation)}`);
 
-    const link = await screen.findByRole("link", { name: "Continue with Roblox" });
+    const link = await screen.findByRole("link", { name: "Continue to Buildly" });
     const target = new URL(link.getAttribute("href") ?? "", "http://localhost");
     expect(target.pathname).toBe("/api/v1/auth/roblox/login");
     expect(target.searchParams.get("next")).toBe(continuation);
@@ -212,7 +212,7 @@ describe("dashboard shell routing", () => {
 
     await renderShellAt("/download");
 
-    expect(await screen.findByText("Download RobloxBridge")).toBeTruthy();
+    expect(await screen.findByText("Download Buildly Companion")).toBeTruthy();
     const notice = await screen.findByTestId("trial-notice");
     expect(notice.textContent).toMatch(/does not start your free trial/i);
   });
@@ -238,7 +238,7 @@ describe("dashboard shell routing", () => {
       const call = calls.find((entry) => entry.path === "/api/v1/auth/logout");
       expect(call?.headers["x-csrf-token"]).toBe("csrf-first");
     });
-    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue to Buildly")).toBeTruthy();
 
     // Signing back in must not reuse the CSRF token from the dead session.
     await router.navigate("/enroll?code=rkuc_TEST123");
@@ -263,7 +263,7 @@ describe("dashboard shell routing", () => {
     await renderShellAt("/devices");
     await screen.findByText("Signed in as Builder 1516563360");
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    await screen.findByText("Continue with Roblox");
+    await screen.findByText("Continue to Buildly");
 
     expect(calls.length).toBeGreaterThan(2);
     for (const call of calls) {
@@ -277,7 +277,7 @@ describe("dashboard shell routing", () => {
     await renderShellAt("/");
 
     expect(
-      await screen.findByRole("heading", { name: /control roblox studio/i, level: 1 }),
+      await screen.findByRole("heading", { name: /control studio/i, level: 1 }),
     ).toBeTruthy();
     const signIn = screen.getAllByRole("link", { name: "Sign in" });
     expect(signIn.length).toBeGreaterThan(0);

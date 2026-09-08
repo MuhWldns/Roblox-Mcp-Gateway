@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -253,16 +254,18 @@ func invalidParamsError() *jsonrpc.Error {
 func sanitizedInternalError() *jsonrpc.Error {
 	return &jsonrpc.Error{Code: codeInternalError, Message: "internal error"}
 }
-
 // sessionIDOf returns the MCP session id of a request; it keys the
 // correlation registry so session teardown retires every in-flight call.
+// In Stateless HTTP mode, req.GetSession() is ephemeral or empty; a synthetic
+// fallback session ID is generated so the relay pending tracker succeeds.
 func sessionIDOf(req mcp.Request) string {
 	if session := req.GetSession(); session != nil {
-		return session.ID()
+		if id := session.ID(); id != "" {
+			return id
+		}
 	}
-	return ""
+	return fmt.Sprintf("stateless-%d", time.Now().UnixNano())
 }
-
 // marshalParams serializes relayed method params verbatim; a nil params
 // value is omitted.
 func marshalParams(params any) json.RawMessage {

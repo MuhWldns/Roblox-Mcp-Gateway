@@ -122,7 +122,7 @@ button { min-height: 46px; padding: 11px 18px; border-radius: 7px; font: inherit
 <body>
 <!-- THESIS: One exact Roblox Studio target, not a generic permission checklist. OWN-WORLD: RobloxKit navy field, white task surface, red action, system sans. STORY: Confirm identity, understand the fixed package, select device and Studio, connect or cancel. FIRST VIEWPORT: One centered consent surface with decision actions after the target controls. FORM: Focused authorization task inside the established dashboard system. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance. -->
 <main>
-<form class="consent" method="POST" action="{{.Action}}">
+<form id="consent-form" class="consent" method="POST" action="{{.Action}}">
 <div class="brand"><strong>RobloxKit</strong><span class="identity">Signed in as {{.DisplayName}}</span></div>
 <h1>Connect Roblox Studio to {{.ClientName}}?</h1>
 <p class="intro"><strong>{{.ClientName}}</strong> is requesting access through RobloxKit. Review the fixed capabilities and choose the exact Studio session it may use.<code class="client-id">{{.ClientID}}</code></p>

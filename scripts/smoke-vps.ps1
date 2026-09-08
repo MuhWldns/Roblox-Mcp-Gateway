@@ -341,7 +341,7 @@ func main() {
 	$listener.Stop()
 
 	$env:PUBLIC_APP_URL = 'https://app.robloxkit-smoke.invalid'
-	$env:MCP_RESOURCE_URL = 'https://api.robloxkit-smoke.invalid'
+	$env:MCP_RESOURCE_URL = 'https://api.robloxkit-smoke.invalid/mcp'
 	$env:LISTEN_ADDRESS = "127.0.0.1:$port"
 	$env:ALLOWED_ORIGIN = 'https://app.robloxkit-smoke.invalid'
 	$env:TRUSTED_PROXIES = '127.0.0.1/32'

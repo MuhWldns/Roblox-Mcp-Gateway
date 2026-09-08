@@ -115,7 +115,7 @@ describe("onboarding web flow", () => {
 
     renderAt("/download", <Download />);
 
-    expect(await screen.findByText("Continue with Roblox")).toBeTruthy();
+    expect(await screen.findByText("Continue to Buildly")).toBeTruthy();
   });
 
   it("shows already authenticated users the download page and redirects them away from login", async () => {
@@ -126,7 +126,7 @@ describe("onboarding web flow", () => {
 
     renderAt("/login", <Login />);
 
-    expect(await screen.findByText("Download RobloxBridge")).toBeTruthy();
+    expect(await screen.findByText("Download Buildly Companion")).toBeTruthy();
     expect(screen.getByTestId("bridge-version").textContent).toBe("1.4.2");
   });
 

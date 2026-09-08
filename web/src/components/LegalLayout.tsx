@@ -15,8 +15,10 @@ export default function LegalLayout({ title, description, children }: LegalLayou
     <div className="min-h-screen bg-surface text-navy">
       <header className="bg-navy text-white border-b border-navy-light">
         <div className="max-w-[1120px] mx-auto px-6 py-5 flex items-center justify-between gap-6 max-sm:px-4">
-          <Link to="/login" className="font-bold tracking-tight text-lg text-white no-underline">
-            RobloxKit
+          <Link to="/login" className="flex items-center gap-2 font-bold tracking-tight text-lg text-white no-underline">
+            <span className="w-6 h-6 rounded bg-red flex items-center justify-center text-xs text-white">B</span>
+            <span>Buildly</span>
+            <span className="text-[10px] font-semibold text-white/50 tracking-wider">BY RBX</span>
           </Link>
           <nav aria-label="Legal documents" className="flex items-center gap-5 text-sm">
             <Link to="/privacy" className="inline-flex min-h-11 items-center px-2 -mx-2 text-white/70 hover:text-white underline-offset-4">
@@ -49,14 +51,14 @@ export default function LegalLayout({ title, description, children }: LegalLayou
             {legalContactEmail}
           </p>
           <p className="text-xs leading-relaxed text-text-secondary mt-4 mb-0">
-            Questions about these terms or your data are handled by RobloxKit at this address.
+            Questions about these terms or your data are handled by Buildly by RBX at this address.
           </p>
         </aside>
       </main>
 
       <footer className="border-t border-border bg-white">
         <div className="max-w-[1120px] mx-auto px-6 py-6 flex items-center justify-between gap-4 text-sm text-text-secondary max-sm:px-4 max-sm:flex-col max-sm:items-start">
-          <span>© 2026 RobloxKit</span>
+          <span>© 2026 Buildly by RBX</span>
           <div className="flex gap-5">
             <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-red underline-offset-4">Privacy</Link>
             <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-red underline-offset-4">Terms</Link>

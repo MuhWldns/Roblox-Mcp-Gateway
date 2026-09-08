@@ -26,7 +26,7 @@ func TestRendererPrintsCompleteConnectedStatusWithoutDependingOnANSI(t *testing.
 		"MCP    : Running",
 		"Studio : 1 session connected",
 		"Press Ctrl+C to stop.",
-		"Bridge is running. Keep this window open while using AI assistants.",
+		"Buildly Companion is running. Keep this window open while using AI assistants.",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain connected output missing %q\noutput:\n%s", want, plain)
@@ -44,7 +44,7 @@ func TestRendererPrintsTruthfulStartupPhrases(t *testing.T) {
 		{name: "enrollment required", event: Event{State: EnrollmentRequired}, want: "ENROLLMENT REQUIRED"},
 		{name: "authenticating", event: Event{State: Authenticating}, want: "Authenticating licensed device"},
 		{name: "connecting", event: Event{State: Connecting}, want: "Connecting to gateway"},
-		{name: "MCP starting", event: Event{State: MCPStarting}, want: "Starting official Roblox MCP"},
+		{name: "MCP starting", event: Event{State: MCPStarting}, want: "Starting official Studio MCP"},
 		{name: "Studio detecting", event: Event{State: StudioDetecting}, want: "Detecting Studio sessions"},
 	}
 
@@ -96,8 +96,7 @@ func TestRendererPrintsActionableDegradedRecovery(t *testing.T) {
 		Code:        "STUDIO_SESSION_UNAVAILABLE",
 		SafeMessage: "No Roblox Studio session is available.",
 	})
-
-	if !strings.Contains(plain, "Action : Open Roblox Studio, then retry the connection.") {
+	if !strings.Contains(plain, "Action : Open Studio, then retry the connection.") {
 		t.Errorf("degraded output missing actionable recovery line\noutput:\n%s", plain)
 	}
 }
@@ -137,7 +136,7 @@ func TestRendererPrintsCompleteFatalErrorWithSafeCode(t *testing.T) {
 		"SYSTEM ERROR",
 		"Code   : MCP_PROCESS_UNAVAILABLE",
 		"Message: Official Roblox MCP could not be started.",
-		"Action : Install/repair the official Roblox MCP, then restart Bridge.",
+		"Action : Install/repair the official Studio MCP launcher, then restart companion.",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("fatal output missing %q\noutput:\n%s", want, plain)

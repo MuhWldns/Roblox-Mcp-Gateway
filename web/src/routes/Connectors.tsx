@@ -166,8 +166,8 @@ export default function Connectors() {
       {connectors !== null && connectors.length === 0 ? (
         <div className="text-center py-12 px-6 bg-white border-2 border-dashed border-border rounded-lg">
           <p className="text-text-muted">
-            No connectors yet. Add the RobloxKit MCP server in ChatGPT or Claude
-            and finish their authorization to see the grant here.
+            No connectors yet. Add the Buildly MCP server in ChatGPT or Claude
+            and finish authorization to see the active grant here.
           </p>
         </div>
       ) : null}

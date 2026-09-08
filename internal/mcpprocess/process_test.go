@@ -353,9 +353,12 @@ func TestLauncherUsesCOMSPECOnlyForTrustedWindowsBatchFile(t *testing.T) {
 	if !strings.EqualFold(command.Path, comspec) {
 		t.Fatalf("batch command path = %q, want COMSPEC %q", command.Path, comspec)
 	}
-	wantArgs := []string{"/d", "/s", "/c", `""` + batchPath + `""`}
+	wantArgs := []string{"/d", "/s", "/c", "call", batchPath}
 	if strings.Join(command.Args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("batch command args = %#v, want %#v", command.Args, wantArgs)
+	}
+	if command.Dir != filepath.Dir(batchPath) {
+		t.Fatalf("batch command directory = %q, want launcher directory %q", command.Dir, filepath.Dir(batchPath))
 	}
 }
 
@@ -388,13 +391,6 @@ func newFakeProcess(t *testing.T, maxFrameBytes int) Process {
 		MaxFrameBytes: maxFrameBytes,
 		StopTimeout:   2 * time.Second,
 	})
-}
-
-func TestQuoteBatchPathForCOMSPEC(t *testing.T) {
-	path := `C:\Program Files\Official MCP\server.bat`
-	if got, want := quoteBatchPath(path), `""C:\Program Files\Official MCP\server.bat""`; got != want {
-		t.Fatalf("quoteBatchPath(%q) = %q, want %q", path, got, want)
-	}
 }
 
 func startProcess(t *testing.T, p Process) {

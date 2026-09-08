@@ -81,7 +81,7 @@ func NewProcess(command Command, options Options) Process {
 		stopTimeout = defaultStopTimeout
 	}
 	return &managedProcess{
-		command:      Command{Path: command.Path, Args: append([]string(nil), command.Args...)},
+		command:      Command{Path: command.Path, Args: append([]string(nil), command.Args...), Dir: command.Dir},
 		maxFrame:     maxFrame,
 		stopTimeout:  stopTimeout,
 		responses:    make(chan json.RawMessage, processQueueSize),
@@ -108,6 +108,7 @@ func (p *managedProcess) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.CommandContext(ctx, p.command.Path, p.command.Args...)
+	cmd.Dir = p.command.Dir
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open MCP stdin: %w", err)

@@ -130,7 +130,7 @@ export default function License() {
             Your 14-day free trial starts only when your first PC is
             connected.{" "}
             <Link to="/download" className="text-red hover:text-red-hover font-medium">
-              Download RobloxBridge
+              Download Buildly Companion
             </Link>{" "}
             to get started.
           </p>

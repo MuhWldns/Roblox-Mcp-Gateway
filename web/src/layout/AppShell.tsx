@@ -26,9 +26,16 @@ export default function AppShell() {
     <div className="grid grid-cols-[240px_1fr] grid-rows-[56px_1fr] min-h-screen max-md:grid-cols-[1fr] max-md:grid-rows-[auto_auto_1fr]">
       {/* Sidebar */}
       <aside className="bg-navy text-white flex flex-col py-6 fixed top-0 left-0 bottom-0 w-[240px] overflow-y-auto z-10 max-md:static max-md:w-full max-md:flex-row max-md:py-3 max-md:overflow-x-auto">
-        <div className="px-5 pb-6 border-b border-navy-light mb-4 max-md:hidden">
-          <h1 className="text-lg font-bold text-white tracking-tight m-0">RobloxKit</h1>
-          <span className="block text-[11px] font-medium text-text-muted uppercase tracking-wider mt-0.5">BY RBX</span>
+        <div className="px-5 pb-5 border-b border-navy-light mb-4 max-md:hidden">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-red to-red-hover flex items-center justify-center font-bold text-white text-sm shadow-sm">
+              B
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white tracking-tight leading-none m-0">Buildly</h1>
+              <span className="block text-[10px] font-semibold text-text-muted uppercase tracking-wider mt-0.5">BY RBX</span>
+            </div>
+          </div>
         </div>
         <nav className="flex-1 px-3 max-md:flex max-md:flex-1" data-testid="app-nav" aria-label="Dashboard sections">
           <ul className="list-none p-0 m-0 max-md:flex max-md:gap-1">

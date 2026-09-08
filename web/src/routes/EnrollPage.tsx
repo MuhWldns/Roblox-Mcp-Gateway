@@ -33,7 +33,7 @@ export default function EnrollPage() {
       const pending = await getEnrollmentClaim(value);
       setClaim(pending);
     } catch {
-      setError("Pairing code not found. Check the code shown in RobloxBridge.");
+      setError("Pairing code not found. Check the code shown in Buildly companion.");
     } finally {
       setBusy(false);
     }
@@ -127,7 +127,7 @@ export default function EnrollPage() {
       <p className="text-text-secondary mb-2">Signed in as {me.display_name}</p>
       <p className="text-text-secondary mb-6">
         Review the device details before granting access. Your one-time 14-day
-        trial starts only after RobloxBridge finishes connecting.
+        trial starts only after Buildly finishes connecting.
       </p>
 
       {!approved ? (
@@ -202,7 +202,7 @@ export default function EnrollPage() {
         >
           <h3 className="text-base font-semibold text-navy mb-2">Device approved</h3>
           <p className="text-text-secondary mb-4">
-            RobloxBridge will connect automatically. Keep it running while this
+            Buildly companion will connect automatically. Keep it running while this
             page waits for the first binding.
           </p>
           {me.trial?.active ? (

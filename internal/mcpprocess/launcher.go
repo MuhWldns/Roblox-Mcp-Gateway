@@ -10,10 +10,12 @@ import (
 	"unicode"
 )
 
-// Command is a fully resolved local executable and its fixed arguments.
+// Command is a fully resolved local executable, its fixed arguments, and an
+// optional trusted working directory.
 type Command struct {
 	Path string
 	Args []string
+	Dir  string
 }
 
 // Launcher resolves one trusted local command configured by the bridge owner.
@@ -63,14 +65,10 @@ func (l Launcher) Resolve() (Command, error) {
 		if err != nil {
 			return Command{}, fmt.Errorf("resolve COMSPEC: %w", err)
 		}
-		return Command{Path: comspec, Args: []string{"/d", "/s", "/c", quoteBatchPath(trustedPath)}}, nil
+		return Command{Path: comspec, Args: []string{"/d", "/s", "/c", "call", trustedPath}, Dir: filepath.Dir(trustedPath)}, nil
 	}
 
 	return Command{Path: trustedPath, Args: append([]string(nil), l.trustedArgs...)}, nil
-}
-
-func quoteBatchPath(path string) string {
-	return `""` + strings.ReplaceAll(path, `"`, `""`) + `""`
 }
 
 func canonicalFile(path string) (string, error) {

@@ -28,7 +28,7 @@ func (Renderer) Render(w io.Writer, event Event) error {
 	case Connecting:
 		return writeString(w, "[3/5] Connecting to gateway ...\n")
 	case MCPStarting:
-		return writeString(w, "[4/5] Starting official Roblox MCP ...\n")
+		return writeString(w, "[4/5] Starting official Studio MCP ...\n")
 	case StudioDetecting:
 		return writeString(w, "[5/5] Detecting Studio sessions ...\n")
 	case Connected:
@@ -50,7 +50,7 @@ func renderConnected(w io.Writer, event Event) error {
 		studio = "1 session connected"
 	}
 
-	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nBridge is running. Keep this window open while using AI assistants.\nPress Ctrl+C to stop.\n", sanitizeTerminalField(event.DeviceName), studio)
+	_, err := fmt.Fprintf(w, "SYSTEM CONNECTED\nDevice : %s\nGateway: Connected\nMCP    : Running\nStudio : %s\n\nBuildly Companion is running. Keep this window open while using AI assistants.\nPress Ctrl+C to stop.\n", sanitizeTerminalField(event.DeviceName), studio)
 	return err
 }
 
@@ -64,7 +64,7 @@ func renderProblem(w io.Writer, heading string, event Event) error {
 		return err
 	}
 	if event.State != Fatal {
-		_, err := fmt.Fprintf(w, "Action : Open Roblox Studio, then retry the connection.\n")
+		_, err := fmt.Fprintf(w, "Action : Open Studio, then retry the connection.\n")
 		return err
 	}
 	_, err := fmt.Fprintf(w, "Action : %s\n", fatalAction(event.Code))
@@ -89,9 +89,9 @@ func sanitizeTerminalField(value string) string {
 func fatalAction(code string) string {
 	switch code {
 	case "MCP_PROCESS_UNAVAILABLE":
-		return "Install/repair the official Roblox MCP, then restart Bridge."
+		return "Install/repair the official Studio MCP launcher, then restart companion."
 	default:
-		return "Resolve the reported error, then restart Bridge."
+		return "Resolve the reported error, then restart companion."
 	}
 }
 
