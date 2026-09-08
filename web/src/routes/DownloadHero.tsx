@@ -233,11 +233,59 @@ export default function DownloadHero() {
               </div>
               <h4 className="text-sm font-bold text-white mb-1.5">Connect AI</h4>
               <p className="text-xs text-white/60 leading-relaxed m-0">
-                Add Buildly MCP server in Claude or ChatGPT to start building with AI in real-time.
+                Follow the ChatGPT walkthrough below to add Buildly, approve access, and use it in a new chat.
               </p>
             </div>
           </div>
         </div>
+
+        <section aria-labelledby="chatgpt-setup-title" className="mt-10 max-w-3xl">
+          <h3 id="chatgpt-setup-title" className="text-xl font-bold text-white tracking-tight mb-2">
+            Connect Buildly to ChatGPT
+          </h3>
+          <p className="text-sm text-white/70 leading-relaxed mb-6">
+            Use ChatGPT in your browser. Custom MCP connections appear as apps or connectors,
+            not the old ChatGPT plugins. Menu names and availability can vary by plan and workspace.
+          </p>
+          <ol className="list-decimal pl-6 space-y-6 text-sm text-white/80 leading-relaxed marker:text-white/60">
+            <li className="pl-2">
+              <h4 className="font-bold text-white mb-1">Turn on Developer mode</h4>
+              Open ChatGPT, click your profile, then open <strong>Settings → Apps → Advanced settings</strong>
+              {" "}and enable <strong>Developer mode</strong>. If your interface says <strong>Connectors</strong>
+              {" "}instead of Apps, look there. If the option is missing, check whether your plan supports it
+              or ask your workspace administrator to enable access.
+            </li>
+            <li className="pl-2">
+              <h4 className="font-bold text-white mb-1">Create a Buildly app</h4>
+              Return to <strong>Settings → Apps</strong> and choose <strong>Create</strong> to add a custom
+              app or connector. Enter <strong>Buildly</strong> as the name and paste this into the
+              {" "}<strong>MCP server URL</strong> field:
+              <code className="block mt-3 p-3 rounded-lg bg-[#080B11] border border-white/10 text-white break-all select-all">
+                {`${window.location.origin}/mcp`}
+              </code>
+              <p className="mt-2 mb-0">Keep <strong>/mcp</strong> at the end. Do not use the download page URL
+                or a localhost address. Choose <strong>OAuth</strong> if authentication is requested.</p>
+            </li>
+            <li className="pl-2">
+              <h4 className="font-bold text-white mb-1">Connect and approve access</h4>
+              Submit the form and choose <strong>Connect</strong> if prompted. On the Buildly authorization
+              page, sign in with the same account you used to approve this computer. Review the requested
+              permissions, approve access, and return to ChatGPT to finish connecting.
+            </li>
+            <li className="pl-2">
+              <h4 className="font-bold text-white mb-1">Select Buildly in a new chat</h4>
+              Start a new chat, open the <strong>+</strong> or tools menu beside the message box, and select
+              {" "}<strong>Buildly</strong> from your apps. Keep Companion running and your Studio project open.
+              Try: <q>Use Buildly to inspect my open Studio project and describe its structure without changing anything.</q>
+              {" "}Review any tool approval prompts before continuing.
+            </li>
+          </ol>
+          <p className="mt-6 text-sm text-white/70 leading-relaxed">
+            Connected but Studio is unavailable? Check that your computer is online on the Devices page
+            and your project appears on the Studios page. If several projects are open, select the intended
+            target on the Connectors page, then try again.
+          </p>
+        </section>
       </div>
     </section>
   );
