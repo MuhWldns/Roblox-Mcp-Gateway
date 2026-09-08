@@ -18,6 +18,7 @@ import Studios from "./routes/Studios";
 import TrialExtension from "./routes/TrialExtension";
 import DeviceTransfer from "./routes/DeviceTransfer";
 import Setup from "./routes/Setup";
+import Dashboard from "./routes/Dashboard";
 
 // The session loader guards every dashboard section: an expired or missing
 // browser session sends the visitor to sign in, while any other API failure
@@ -36,7 +37,7 @@ export async function sessionLoader({ request }: LoaderFunctionArgs): Promise<Me
 
 const dashboardSections: RouteObject[] = [
   { path: "setup", element: <Setup /> },
-  { path: "dashboard", element: <Setup /> },
+  { path: "dashboard", element: <Dashboard /> },
   { path: "devices", element: <Devices /> },
   { path: "studios", element: <Studios /> },
   { path: "connectors", element: <Connectors /> },

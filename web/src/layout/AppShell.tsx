@@ -4,6 +4,7 @@ import { type MeResponse, logout } from "../api/client";
 const sections = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/setup", label: "Setup" },
+  { to: "/download", label: "Download" },
   { to: "/devices", label: "Devices" },
   { to: "/studios", label: "Studios" },
   { to: "/connectors", label: "Connectors" },
