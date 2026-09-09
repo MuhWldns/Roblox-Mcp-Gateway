@@ -138,10 +138,10 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 		switch {
 		case err == nil:
 			return entitlement.Entitlement{}, entitlement.Binding{},
-				fmt.Errorf("mysqlstore: device hardware fingerprint already used by another account: %w", entitlement.ErrHardwareAlreadyUsed)
+				fmt.Errorf("mysqlstore: device fingerprint already used by another account: %w", entitlement.ErrDeviceAlreadyUsed)
 		case errors.Is(err, sql.ErrNoRows):
 		default:
-			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: inspect device hardware fingerprint: %w", err)
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: inspect device fingerprint: %w", err)
 		}
 	}
 
@@ -188,7 +188,7 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 			nullableBytes(fingerprintHash), in.DeviceID, in.UserID,
 		); err != nil {
 			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
-				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device fingerprint collision: %w", entitlement.ErrDeviceAlreadyUsed)
 			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
 		}
@@ -280,7 +280,7 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 		); err != nil {
 			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
 				return entitlement.Entitlement{}, entitlement.Binding{},
-					fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+					fmt.Errorf("mysqlstore: device fingerprint collision: %w", entitlement.ErrDeviceAlreadyUsed)
 			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device: %w", err)
 		}
@@ -300,7 +300,7 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 			nullableBytes(fingerprintHash), in.DeviceID, in.UserID,
 		); err != nil {
 			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
-				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device fingerprint collision: %w", entitlement.ErrDeviceAlreadyUsed)
 			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
 		}

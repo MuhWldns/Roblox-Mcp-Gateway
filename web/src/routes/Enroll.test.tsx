@@ -57,6 +57,16 @@ function installFetch(routes: Record<string, MockRoute | MockRoute[]>): Recorded
   return calls;
 }
 
+function defer<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function renderAt(path: string, element: React.ReactElement) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -200,7 +210,7 @@ describe("onboarding web flow", () => {
 
     // Ensure polling stops once active trial is received
     const callCountAtCompletion = calls.length;
-    const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
+    const { promise: delayPromise, resolve: delayResolve } = defer<void>();
     setTimeout(delayResolve, 1200);
     await delayPromise;
     expect(calls.length).toBe(callCountAtCompletion);
@@ -252,7 +262,7 @@ describe("onboarding web flow", () => {
 
     // Record call count after denial and ensure polling has stopped
     const callCountAtDenial = calls.length;
-    const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
+    const { promise: delayPromise, resolve: delayResolve } = defer<void>();
     setTimeout(delayResolve, 1200);
     await delayPromise;
     expect(calls.length).toBe(callCountAtDenial);

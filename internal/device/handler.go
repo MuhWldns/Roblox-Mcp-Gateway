@@ -22,7 +22,7 @@ type EnrollmentBeginHandler struct {
 // ServeHTTP accepts a Bridge claim and returns the pairing code.
 func (h *EnrollmentBeginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Enrollment == nil {
-		writeError(w, http.StatusServiceUnavailable, "enrollment unavailable")
+		writeError(w, http.StatusServiceUnavailable, "pairing unavailable")
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -40,9 +40,9 @@ func (h *EnrollmentBeginHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		case errors.Is(err, ErrInvalidClaim):
 			writeError(w, http.StatusBadRequest, "invalid device claim")
 		case errors.Is(err, ErrTooManyPending):
-			writeError(w, http.StatusServiceUnavailable, "enrollment capacity reached")
+			writeError(w, http.StatusServiceUnavailable, "pairing capacity reached")
 		default:
-			writeError(w, http.StatusInternalServerError, "enrollment unavailable")
+			writeError(w, http.StatusInternalServerError, "pairing unavailable")
 		}
 		return
 	}
@@ -71,7 +71,7 @@ func (h *EnrollmentLookupHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if h.Enrollment == nil || h.Sessions == nil {
-		writeError(w, http.StatusServiceUnavailable, "enrollment unavailable")
+		writeError(w, http.StatusServiceUnavailable, "pairing unavailable")
 		return
 	}
 	if _, err := requireSession(r, h.Sessions); err != nil {
@@ -80,20 +80,20 @@ func (h *EnrollmentLookupHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
-		writeError(w, http.StatusBadRequest, "enrollment code is required")
+		writeError(w, http.StatusBadRequest, "pairing code is required")
 		return
 	}
 	pending, err := h.Enrollment.Lookup(r.Context(), code)
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrEnrollmentExpired):
-		writeError(w, http.StatusGone, "enrollment expired")
+		writeError(w, http.StatusGone, "pairing expired")
 		return
 	case errors.Is(err, ErrEnrollmentNotFound):
-		writeError(w, http.StatusNotFound, "enrollment not found")
+		writeError(w, http.StatusNotFound, "pairing not found")
 		return
 	default:
-		writeError(w, http.StatusInternalServerError, "enrollment unavailable")
+		writeError(w, http.StatusInternalServerError, "pairing unavailable")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -116,7 +116,7 @@ func (h *EnrollmentApproveHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if h.Enrollment == nil || h.Sessions == nil {
-		writeError(w, http.StatusServiceUnavailable, "enrollment unavailable")
+		writeError(w, http.StatusServiceUnavailable, "pairing unavailable")
 		return
 	}
 	webSession, err := requireSession(r, h.Sessions)
@@ -135,9 +135,9 @@ func (h *EnrollmentApproveHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		case errors.Is(err, ErrApprovalOwnerRequired):
 			writeError(w, http.StatusUnauthorized, "authentication required")
 		case errors.Is(err, ErrEnrollmentExpired):
-			writeError(w, http.StatusGone, "enrollment expired")
+			writeError(w, http.StatusGone, "pairing expired")
 		case errors.Is(err, ErrEnrollmentNotFound):
-			writeError(w, http.StatusNotFound, "enrollment not found")
+			writeError(w, http.StatusNotFound, "pairing not found")
 		default:
 			writeError(w, http.StatusInternalServerError, "approval unavailable")
 		}
@@ -156,7 +156,7 @@ type EnrollmentExchangeHandler struct {
 // ServeHTTP exchanges an approved enrollment code for a device credential.
 func (h *EnrollmentExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Enrollment == nil {
-		writeError(w, http.StatusServiceUnavailable, "enrollment unavailable")
+		writeError(w, http.StatusServiceUnavailable, "pairing unavailable")
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -178,10 +178,10 @@ func (h *EnrollmentExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
 		case errors.Is(err, ErrEnrollmentNotFound), errors.Is(err, ErrCodeNotFound), errors.Is(err, ErrCodeConsumed):
-			writeError(w, http.StatusNotFound, "enrollment code not found")
+			writeError(w, http.StatusNotFound, "pairing code not found")
 		case errors.Is(err, ErrEnrollmentExpired), errors.Is(err, ErrCodeExpired):
-			writeError(w, http.StatusGone, "enrollment expired")
-		case errors.Is(err, entitlement.ErrHardwareAlreadyUsed):
+			writeError(w, http.StatusGone, "pairing expired")
+		case errors.Is(err, entitlement.ErrDeviceAlreadyUsed):
 			writeError(w, http.StatusForbidden, "You don’t have a license. Please contact support to get a license.")
 		case errors.Is(err, entitlement.ErrTrialAlreadyUsed):
 			writeError(w, http.StatusForbidden, "trial already used")
@@ -194,7 +194,7 @@ func (h *EnrollmentExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		case strings.Contains(err.Error(), " is "):
 			writeError(w, http.StatusForbidden, "device is not active")
 		default:
-			writeError(w, http.StatusInternalServerError, "enrollment unavailable")
+			writeError(w, http.StatusInternalServerError, "pairing unavailable")
 		}
 		return
 	}

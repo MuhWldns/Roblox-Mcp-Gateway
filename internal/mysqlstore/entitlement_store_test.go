@@ -369,7 +369,7 @@ func TestAuditRowsNeverContainCredentialDigest(t *testing.T) {
 	}
 }
 
-func TestBindFirstDeviceRejectsCrossAccountHardwareReuse(t *testing.T) {
+func TestBindFirstDeviceRejectsCrossAccountDeviceReuse(t *testing.T) {
 	store, db := newEntitlementTestStack(t)
 	fpHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -389,7 +389,7 @@ func TestBindFirstDeviceRejectsCrossAccountHardwareReuse(t *testing.T) {
 		t.Fatalf("first user BindFirstDevice: %v", err)
 	}
 
-	// Second user with same hardware fingerprint is rejected with ErrHardwareAlreadyUsed.
+	// Second user with same device fingerprint is rejected with ErrDeviceAlreadyUsed.
 	cred2 := testDigest("cred-user-2")
 	_, _, err = store.BindFirstDevice(t.Context(), trialTestBase(), entitlement.FirstDeviceBinding{
 		UserID:           "user-2",
@@ -401,8 +401,8 @@ func TestBindFirstDeviceRejectsCrossAccountHardwareReuse(t *testing.T) {
 		CredentialDigest: cred2,
 		AuditCorrelation: "corr-2",
 	})
-	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
-		t.Fatalf("second user error = %v, want ErrHardwareAlreadyUsed", err)
+	if !errors.Is(err, entitlement.ErrDeviceAlreadyUsed) {
+		t.Fatalf("second user error = %v, want ErrDeviceAlreadyUsed", err)
 	}
 
 	// Verify no rows created for user-2.
@@ -546,7 +546,7 @@ func TestBindFirstDeviceLegacyDeviceReclaimBackfillsFingerprintWithoutRestarting
 		t.Fatalf("revoked credentials count = %d, want 1", got)
 	}
 
-	// A second account attempting to use this newly backfilled fingerprint must be rejected with ErrHardwareAlreadyUsed.
+	// A second account attempting to use this newly backfilled fingerprint must be rejected with ErrDeviceAlreadyUsed.
 	cred3 := testDigest("cred-attacker")
 	_, _, err = store.BindFirstDevice(t.Context(), reclaimTime.Add(time.Hour), entitlement.FirstDeviceBinding{
 		UserID:           "user-other",
@@ -558,7 +558,7 @@ func TestBindFirstDeviceLegacyDeviceReclaimBackfillsFingerprintWithoutRestarting
 		CredentialDigest: cred3,
 		AuditCorrelation: "corr-other",
 	})
-	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
-		t.Fatalf("cross-account attempt using backfilled fingerprint error = %v, want ErrHardwareAlreadyUsed", err)
+	if !errors.Is(err, entitlement.ErrDeviceAlreadyUsed) {
+		t.Fatalf("cross-account attempt using backfilled fingerprint error = %v, want ErrDeviceAlreadyUsed", err)
 	}
 }

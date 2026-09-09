@@ -223,13 +223,13 @@ func TestRunEnrollExpiryIsError(t *testing.T) {
 	srv := newEnrollServer(t, func(_ int, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGone)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "enrollment expired"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "pairing expired"})
 	})
 	store := &recordingEnrollStore{}
 	cfg := testEnrollConfig(srv.server.URL, store, io.Discard)
 	err := RunEnroll(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("expired enrollment must fail with expiry, got %v", err)
+		t.Fatalf("expired pairing must fail with expiry, got %v", err)
 	}
 	if n := srv.exchangeCount(); n != 1 {
 		t.Fatalf("a 410 must not be retried, exchange attempts = %d", n)

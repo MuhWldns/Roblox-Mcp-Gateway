@@ -108,7 +108,7 @@ func runSmartFlow(ctx context.Context, deps firstRunDeps) error {
 		if !errors.Is(loadErr, os.ErrNotExist) {
 			return fmt.Errorf("read device credential: %w", loadErr)
 		}
-		fmt.Fprintln(deps.stdout, "Device credential is missing; starting re-enrollment for this device.")
+		fmt.Fprintln(deps.stdout, "Device credential is missing; reconnecting this device.")
 		if err := runEnrollment(ctx, deps, config.GatewayURL, config.DeviceID, credentialPath); err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func runEnrollment(ctx context.Context, deps firstRunDeps, gatewayURL, deviceID,
 	}
 	fpHash, err := bridgeapp.MachineFingerprintHash()
 	if err != nil {
-		return fmt.Errorf("identify hardware for enrollment: %w", err)
+		return fmt.Errorf("identify device for pairing: %w", err)
 	}
 	enrollConfig := bridgeapp.EnrollConfig{
 		APIBaseURL:      origin,

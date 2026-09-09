@@ -103,20 +103,20 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 
 	beginBody, err := enrollPostJSON(ctx, client, cfg.APIBaseURL+enrollBeginPath, claim)
 	if err != nil {
-		return fmt.Errorf("bridgeapp: begin enrollment: %w", err)
+		return fmt.Errorf("bridgeapp: begin pairing: %w", err)
 	}
 	var begin struct {
 		UserCode        string `json:"user_code"`
 		VerificationURL string `json:"verification_url"`
 	}
 	if err := json.Unmarshal(beginBody, &begin); err != nil {
-		return fmt.Errorf("bridgeapp: decode enrollment begin response: %w", err)
+		return fmt.Errorf("bridgeapp: decode pairing begin response: %w", err)
 	}
 	if strings.TrimSpace(begin.UserCode) == "" {
-		return errors.New("bridgeapp: enrollment begin returned no user code")
+		return errors.New("bridgeapp: pairing begin returned no pairing code")
 	}
 	fmt.Fprintf(cfg.Output, "Open the verification URL in your browser and approve this device:\n%s\n", begin.VerificationURL)
-	fmt.Fprintf(cfg.Output, "Enrollment user code: %s\n", begin.UserCode)
+	fmt.Fprintf(cfg.Output, "Pairing code: %s\n", begin.UserCode)
 	if cfg.OnVerificationURL != nil {
 		cfg.OnVerificationURL(begin.VerificationURL)
 	}
@@ -127,26 +127,26 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
+			return fmt.Errorf("bridgeapp: pairing interrupted: %w", err)
 		}
 		body, status, retryAfter, err := enrollPostJSONStatus(ctx, client, cfg.APIBaseURL+enrollExchangePath, exchangePayload)
 		if err != nil && status != http.StatusGone && status != http.StatusTooManyRequests && status != http.StatusForbidden {
-			return fmt.Errorf("bridgeapp: exchange enrollment: %w", err)
+			return fmt.Errorf("bridgeapp: exchange pairing: %w", err)
 		}
 		switch {
 		case status == http.StatusAccepted:
 			fmt.Fprintf(cfg.Output, "Waiting for approval…\n")
 			if err := sleepContext(ctx, poll); err != nil {
-				return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
+				return fmt.Errorf("bridgeapp: pairing interrupted: %w", err)
 			}
 			continue
 		case status == http.StatusTooManyRequests:
 			if retryAfter <= 0 {
 				retryAfter = poll
 			}
-			fmt.Fprintf(cfg.Output, "Enrollment temporarily rate limited; retrying…\n")
+			fmt.Fprintf(cfg.Output, "Pairing temporarily rate limited; retrying…\n")
 			if err := sleepContext(ctx, retryAfter); err != nil {
-				return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
+				return fmt.Errorf("bridgeapp: pairing interrupted: %w", err)
 			}
 			continue
 		case status == http.StatusOK:
@@ -155,25 +155,25 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 				DeviceID         string `json:"device_id"`
 			}
 			if err := json.Unmarshal(body, &cred); err != nil {
-				return fmt.Errorf("bridgeapp: decode enrollment credential: %w", err)
+				return fmt.Errorf("bridgeapp: decode device credential: %w", err)
 			}
 			if strings.TrimSpace(cred.DeviceCredential) == "" {
-				return errors.New("bridgeapp: enrollment exchange returned no credential")
+				return errors.New("bridgeapp: pairing exchange returned no credential")
 			}
 			if err := cfg.Credential.Save([]byte(cred.DeviceCredential)); err != nil {
-				return fmt.Errorf("bridgeapp: save enrollment credential: %w", err)
+				return fmt.Errorf("bridgeapp: save device credential: %w", err)
 			}
 			// The credential itself is never printed: it lives only in the
 			// platform credential store.
-			fmt.Fprintf(cfg.Output, "Enrollment complete. Device ID: %s\n", cred.DeviceID)
+			fmt.Fprintf(cfg.Output, "Device connected. Device ID: %s\n", cred.DeviceID)
 			return nil
 		case status == http.StatusForbidden:
 			fmt.Fprintln(cfg.Output, defaultLicenseRequiredMsg)
 			return errors.New(defaultLicenseRequiredMsg)
 		case status == http.StatusGone:
-			return errors.New("bridgeapp: enrollment code expired before approval; run enrollment again")
+			return errors.New("bridgeapp: pairing code expired before approval; run pairing again")
 		default:
-			return fmt.Errorf("bridgeapp: enrollment exchange rejected with status %d: %s", status, sanitizeStatusBody(body))
+			return fmt.Errorf("bridgeapp: pairing exchange rejected with status %d: %s", status, sanitizeStatusBody(body))
 		}
 	}
 }
@@ -184,16 +184,16 @@ func (cfg EnrollConfig) validate() error {
 		return fmt.Errorf("bridgeapp: https API origin is required, got %q", cfg.APIBaseURL)
 	}
 	if strings.TrimSpace(cfg.DeviceID) == "" {
-		return errors.New("bridgeapp: device id is required for enrollment")
+		return errors.New("bridgeapp: device id is required for pairing")
 	}
 	if !isValidFingerprintHash(cfg.FingerprintHash) {
-		return errors.New("bridgeapp: valid 64-character hex fingerprint hash is required for enrollment")
+		return errors.New("bridgeapp: valid 64-character hex fingerprint hash is required for pairing")
 	}
 	if cfg.Credential == nil {
-		return errors.New("bridgeapp: credential store is required for enrollment")
+		return errors.New("bridgeapp: credential store is required for pairing")
 	}
 	if cfg.Output == nil {
-		return errors.New("bridgeapp: output writer is required for enrollment")
+		return errors.New("bridgeapp: output writer is required for pairing")
 	}
 	return nil
 }

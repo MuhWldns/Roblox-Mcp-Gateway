@@ -214,7 +214,7 @@ export default function EnrollPage() {
           ) : null}
 
           {claim !== null ? (
-            <section aria-label="Device requesting enrollment" className="bg-white border border-border rounded-lg p-6">
+            <section aria-label="Computer requesting connection" className="bg-white border border-border rounded-lg p-6">
               <h3 className="text-base font-semibold text-navy mb-4">Review this computer</h3>
               <dl className="grid grid-cols-[minmax(0,8rem)_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm mb-5">
                 <dt className="text-text-muted">Computer name</dt>
@@ -255,7 +255,7 @@ export default function EnrollPage() {
       ) : (
         <section
           data-testid="approval-status"
-          aria-label="Enrollment approval result"
+          aria-label="Computer connection approval result"
           className="bg-white border border-border rounded-lg p-6"
         >
           <h3 className="text-base font-semibold text-navy mb-2">Computer approved</h3>

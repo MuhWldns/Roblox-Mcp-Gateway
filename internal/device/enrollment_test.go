@@ -493,7 +493,7 @@ func TestCrossAccountFingerprintCollisionRejectionAndLookupTransition(t *testing
 		t.Fatalf("account 1 credential invalid: %+v", cred1)
 	}
 
-	// Account 2 attempts to enroll with the exact same hardware fingerprint.
+	// Account 2 attempts to enroll with the exact same device fingerprint.
 	claim2 := desktopClaim("dev-account-2")
 	claim2.FingerprintHash = fpHash
 
@@ -519,10 +519,10 @@ func TestCrossAccountFingerprintCollisionRejectionAndLookupTransition(t *testing
 		t.Fatalf("account 2 approved status = %q, want 'approved'", pending2Approved.Status)
 	}
 
-	// Account 2 exchange must fail with ErrHardwareAlreadyUsed.
+	// Account 2 exchange must fail with ErrDeviceAlreadyUsed.
 	_, err = stack.enrollment.Exchange(t.Context(), string(userCode2))
-	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
-		t.Fatalf("account 2 exchange error = %v, want ErrHardwareAlreadyUsed", err)
+	if !errors.Is(err, entitlement.ErrDeviceAlreadyUsed) {
+		t.Fatalf("account 2 exchange error = %v, want ErrDeviceAlreadyUsed", err)
 	}
 
 	// Lookup must now transition to "license_required".
@@ -549,7 +549,7 @@ func TestCrossAccountFingerprintCollisionRejectionAndLookupTransition(t *testing
 	}
 }
 
-func TestExchangeHandlerReturnsGeneric403OnHardwareAlreadyUsed(t *testing.T) {
+func TestExchangeHandlerReturnsGeneric403OnDeviceAlreadyUsed(t *testing.T) {
 	stack := newEnrollmentStack(t)
 	user1 := stack.user(t, "handler-user-1")
 	user2 := stack.user(t, "handler-user-2")
@@ -592,7 +592,7 @@ func TestExchangeHandlerReturnsGeneric403OnHardwareAlreadyUsed(t *testing.T) {
 
 	// Response must omit technical / internal error terms.
 	bodyStr := rec.Body.String()
-	for _, technicalTerm := range []string{"ErrHardwareAlreadyUsed", "fingerprint", "collision", "trial", "SQL", "mysql", "devices"} {
+	for _, technicalTerm := range []string{"ErrDeviceAlreadyUsed", "fingerprint", "collision", "trial", "SQL", "mysql", "devices"} {
 		if strings.Contains(strings.ToLower(bodyStr), strings.ToLower(technicalTerm)) {
 			t.Fatalf("handler response leaked technical term %q: %s", technicalTerm, bodyStr)
 		}

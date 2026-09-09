@@ -185,7 +185,7 @@ func runEnroll(ctx context.Context) {
 		os.Exit(1)
 	}
 	if err := runEnrollFlow(ctx, config, os.Stdout, nil); err != nil {
-		log.Printf("enrollment failed: %v", err)
+		log.Printf("device pairing failed: %v", err)
 		os.Exit(1)
 	}
 }
@@ -209,7 +209,7 @@ func runEnrollFlow(ctx context.Context, config appconfig.Enroll, out io.Writer, 
 	// smart mode re-enrolls with the SAME id, and explicit rotation goes
 	// through the dashboard.
 	if _, err := store.Load(); err == nil {
-		return errors.New("device credential already exists; delete it (or use the smart first-run flow) to re-enroll this device")
+		return errors.New("device credential already exists; delete it (or use the smart first-run flow) to reconnect this device")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read device credential: %w", err)
 	}
@@ -242,7 +242,7 @@ func runEnrollFlow(ctx context.Context, config appconfig.Enroll, out io.Writer, 
 	}
 	fpHash, err := bridgeapp.MachineFingerprintHash()
 	if err != nil {
-		return fmt.Errorf("identify hardware for enrollment: %w", err)
+		return fmt.Errorf("identify device for pairing: %w", err)
 	}
 	return bridgeapp.RunEnroll(ctx, bridgeapp.EnrollConfig{
 		APIBaseURL:      origin,

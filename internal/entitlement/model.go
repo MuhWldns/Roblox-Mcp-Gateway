@@ -15,9 +15,9 @@ var (
 	// ErrTrialAlreadyUsed indicates the Roblox subject, across all internal
 	// accounts, has already consumed its one historical free trial.
 	ErrTrialAlreadyUsed = errors.New("entitlement: trial already used")
-	// ErrHardwareAlreadyUsed indicates enrollment was refused because the
-	// hardware fingerprint has already been used by another account.
-	ErrHardwareAlreadyUsed = errors.New("entitlement: hardware already used by another account")
+	// ErrDeviceAlreadyUsed indicates pairing was refused because the
+	// device fingerprint has already been used by another account.
+	ErrDeviceAlreadyUsed = errors.New("entitlement: device already used by another account")
 	// ErrNoSlot indicates a license has no free device slot.
 	ErrNoSlot = errors.New("entitlement: no free device slot")
 	// ErrBindingNotFound indicates a license-device binding is missing.

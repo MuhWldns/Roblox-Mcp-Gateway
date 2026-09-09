@@ -73,7 +73,7 @@ var (
 	errRemoteCredentialStoreMissing = errors.New("bridgeapp: credential store is required")
 	errRemoteGatewayURLMissing      = errors.New("bridgeapp: gateway URL is required")
 	errRemoteDeviceIDMissing        = errors.New("bridgeapp: device ID is required")
-	errEnrollmentRequired           = errors.New("bridgeapp: device enrollment credential is missing")
+	errEnrollmentRequired           = errors.New("bridgeapp: device credential is missing")
 )
 
 // remoteHello is the hello payload announcing the Bridge on every connection.
@@ -213,7 +213,7 @@ func RunRemote(ctx context.Context, deps RemoteDeps) error {
 				return ctx.Err()
 			}
 			if errors.Is(dialErr, errTerminalAuth) {
-				return emitFatal(emit, codeCredentialRejected, "The device enrollment credential was rejected by the gateway.", dialErr)
+				return emitFatal(emit, codeCredentialRejected, "The device credential was rejected by the gateway.", dialErr)
 			}
 			delay := deps.Backoff.Next(attempt, deps.Random)
 			attempt++
@@ -258,7 +258,7 @@ func (r *remoteRunner) loadCredential() (string, error) {
 			}
 			return "", fmt.Errorf("%w: %v", errEnrollmentRequired, err)
 		}
-		return "", emitFatal(r.emit, codeCredentialStore, "The device enrollment credential could not be read.", err)
+		return "", emitFatal(r.emit, codeCredentialStore, "The device credential could not be read.", err)
 	}
 	credential := strings.TrimSpace(string(data))
 	if credential == "" {
@@ -533,7 +533,7 @@ func (r *remoteRunner) relayLoop(ctx context.Context, session *bridgeSession, ch
 			cause := session.terminalCause()
 			if isTerminalAuthFailure(cause) {
 				terminal := fmt.Errorf("%w: %v", errTerminalAuth, cause)
-				return 0, emitFatal(r.emit, codeCredentialRevoked, "The device enrollment credential was revoked.", terminal)
+				return 0, emitFatal(r.emit, codeCredentialRevoked, "The device credential was revoked.", terminal)
 			}
 			if cause == nil {
 				cause = errors.New("gateway connection closed")

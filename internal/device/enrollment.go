@@ -42,31 +42,31 @@ const (
 
 var (
 	// ErrInvalidClaim indicates a Bridge device claim failed validation.
-	ErrInvalidClaim = errors.New("device: invalid enrollment claim")
+	ErrInvalidClaim = errors.New("device: invalid pairing claim")
 	// ErrApprovalOwnerRequired indicates an approval arrived without a
 	// session-owned internal user.
 	ErrApprovalOwnerRequired = errors.New("device: approval requires a session user")
 	// ErrEnrollmentNotFound indicates the enrollment code is unknown or spent.
-	ErrEnrollmentNotFound = errors.New("device: enrollment not found")
+	ErrEnrollmentNotFound = errors.New("device: pairing not found")
 	// ErrEnrollmentExpired indicates the enrollment window elapsed.
-	ErrEnrollmentExpired = errors.New("device: enrollment expired")
+	ErrEnrollmentExpired = errors.New("device: pairing expired")
 	// ErrEnrollmentPending indicates the device has not been approved yet.
-	ErrEnrollmentPending = errors.New("device: enrollment not approved yet")
+	ErrEnrollmentPending = errors.New("device: pairing not approved yet")
 	// ErrTooManyPending indicates the pending enrollment buffer is full.
-	ErrTooManyPending = errors.New("device: too many pending enrollments")
+	ErrTooManyPending = errors.New("device: too many pending pairings")
 	// ErrCodeNotFound indicates no enrollment code row matches the digest.
-	ErrCodeNotFound = errors.New("device: enrollment code not found")
+	ErrCodeNotFound = errors.New("device: pairing code not found")
 	// ErrCodeConsumed indicates the enrollment code was already used.
-	ErrCodeConsumed = errors.New("device: enrollment code already consumed")
+	ErrCodeConsumed = errors.New("device: pairing code already consumed")
 	// ErrCodeExpired indicates the enrollment code row elapsed.
-	ErrCodeExpired = errors.New("device: enrollment code expired")
+	ErrCodeExpired = errors.New("device: pairing code expired")
 )
 
 // DeviceClaim is the self-asserted Bridge installation identity presented at
-// enrollment. DeviceID is a random installation identifier persisted by the
-// Bridge. FingerprintHash is a separate HMAC-SHA256 hardware identity used to
+// pairing. DeviceID is a random installation identifier persisted by the
+// Bridge. FingerprintHash is a separate HMAC-SHA256 device identity used to
 // prevent the same computer from claiming trials through multiple accounts.
-// Every new enrollment requires it; the database remains nullable only for
+// Every new pairing requires it; the database remains nullable only for
 // device rows created by older Bridge releases.
 type DeviceClaim struct {
 	DeviceID        string `json:"device_id"`
@@ -175,7 +175,7 @@ type Enrollment struct {
 // first-device binder, and a credential pepper. The pepper is copied.
 func NewEnrollment(store EnrollmentStore, binder FirstDeviceBinder, pepper []byte, now func() time.Time) (*Enrollment, error) {
 	if store == nil {
-		return nil, errors.New("device: nil enrollment store")
+		return nil, errors.New("device: nil pairing store")
 	}
 	if binder == nil {
 		return nil, errors.New("device: nil first device binder")
@@ -210,7 +210,7 @@ func (e *Enrollment) Begin(ctx context.Context, claim DeviceClaim) (UserCode, Ve
 	now := e.now().UTC()
 	plain, digest, err := credential.Generate(userCodePrefix, userCodeBytes, e.pepper)
 	if err != nil {
-		return "", "", fmt.Errorf("device: generate enrollment code: %w", err)
+		return "", "", fmt.Errorf("device: generate pairing code: %w", err)
 	}
 	key := codeKey(digest)
 
@@ -289,7 +289,7 @@ func (e *Enrollment) Approve(ctx context.Context, userID, userCode string) error
 	}
 	codeID, err := newEnrollmentID()
 	if err != nil {
-		return fmt.Errorf("device: generate enrollment id: %w", err)
+		return fmt.Errorf("device: generate pairing id: %w", err)
 	}
 	if err := e.store.InsertEnrollmentCode(ctx, EnrollmentCode{
 		ID:         codeID,
@@ -297,7 +297,7 @@ func (e *Enrollment) Approve(ctx context.Context, userID, userCode string) error
 		CodeDigest: digest,
 		ExpiresAt:  now.Add(e.CodeTTL),
 	}); err != nil {
-		return fmt.Errorf("device: persist enrollment code: %w", err)
+		return fmt.Errorf("device: persist pairing code: %w", err)
 	}
 	entry.approved = true
 	entry.status = "approved"
@@ -352,7 +352,7 @@ func (e *Enrollment) Exchange(ctx context.Context, deviceCode string) (DeviceCre
 		}
 	}
 	if record.UserID != approvedBy {
-		return DeviceCredential{}, errors.New("device: enrollment owner mismatch")
+		return DeviceCredential{}, errors.New("device: pairing owner mismatch")
 	}
 
 	token, credentialDigest, err := credential.Generate(deviceCredentialPrefix, deviceCredentialBytes, e.pepper)
@@ -373,7 +373,7 @@ func (e *Enrollment) Exchange(ctx context.Context, deviceCode string) (DeviceCre
 		CredentialDigest: credentialDigest,
 		AuditCorrelation: record.ID,
 	}); err != nil {
-		if errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
+		if errors.Is(err, entitlement.ErrDeviceAlreadyUsed) {
 			e.mu.Lock()
 			if entry, ok := e.pending[key]; ok {
 				entry.status = "license_required"

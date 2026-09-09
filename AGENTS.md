@@ -35,7 +35,7 @@ ChatGPT / Claude (MCP Client)          Browser (SPA Dashboard)
 ```
 
 ### Data Flow & Request Lifecycle
-1. **Device Enrollment & Trial Abuse Prevention**: `cmd/bridge` derives a stable HMAC-SHA256 from multiple Windows hardware identifiers. Every new enrollment requires this 64-character hex fingerprint digest. The backend stores only the 32-byte binary digest (`fingerprint_hash`) backed by a unique index (`uq_devices_fingerprint`) to prevent cross-account trial reuse across distinct accounts on the same computer (random installation `device_id` alone does not enforce trial uniqueness). Historical rows may remain `NULL` only until same-owner re-enrollment backfills them.
+1. **Device Pairing & Trial Abuse Prevention**: `cmd/bridge` derives a stable HMAC-SHA256 from multiple Windows hardware identifiers. Every new pairing requires this 64-character hex fingerprint digest. The backend stores only the 32-byte binary digest (`fingerprint_hash`) backed by a unique index (`uq_devices_fingerprint`) to prevent cross-account trial reuse across distinct accounts on the same computer (random installation `device_id` alone does not enforce trial uniqueness). Historical rows may remain `NULL` only until same-owner re-pairing backfills them.
 2. **AI Client Tool Invocation**: ChatGPT/Claude connects via `/mcp` with an OAuth 2.1 bearer token issued by `mcpoauth` (mandatory PKCE S256, refresh token rotation, Fosite-backed transactional store).
 3. **Policy & Entitlement Check**: `mcpgateway` validates bearer/resource/origin, active license/trial, and tool execution policy; admission is managed by `routing.Resolver` (resolution precedence: explicit studio > bound studio > sole online instance; rejects offline/cross-device/ambiguous targets).
 4. **WSS Message Relay**: Request is framed as a strict `pkg/bridgeproto.Message` envelope and forwarded over an active authenticated WebSocket (`bridgehub`, which enforces SHA-256 credential digests, hello handshake, and connection uniqueness per device).
@@ -143,11 +143,11 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Clock & Time Injection**: Never call `time.Now()` directly in domain logic; inject a `Clock` interface (e.g., `systemClock`) to enable deterministic testing.
 - **Explicit Dependency Injection**: Construct dependencies in package constructors (e.g., `NewServer(...)`, `NewService(...)`). Avoid global mutable state.
 - **Concurrency & Context**: Always propagate `context.Context`. Graceful teardown uses `signal.NotifyContext` with explicit timeout budgets (`shutdownBudget = 30 * time.Second`).
-- **Data Protection**: Store all sensitive tokens/credentials hashed using SHA-256 with a secret pepper (`TOKEN_PEPPER`). Never store plaintext tokens or credentials; cookies use `__Host-` prefixes. For hardware fingerprints, store only the 32-byte binary HMAC-SHA256 digest—never raw hardware identifiers. Trial uniqueness is enforced via unique device fingerprint index, rejecting cross-account reuse while preserving `NULL` for historical rows until same-owner re-enrollment backfills them.
+- **Data Protection**: Store all sensitive tokens/credentials hashed using SHA-256 with a secret pepper (`TOKEN_PEPPER`). Never store plaintext tokens or credentials; cookies use `__Host-` prefixes. For device fingerprints, store only the 32-byte binary HMAC-SHA256 digest derived from Windows hardware identifiers—never raw identifiers. Trial uniqueness is enforced via unique device fingerprint index, rejecting cross-account device reuse while preserving `NULL` for historical rows until same-owner re-pairing backfills them.
 
 ### Bridge Client (`cmd/bridge`)
 - **Modes**: Automatically determines runtime mode (Windows Service mode under SCM, remote daemon, local test runner, or smart first-run wizard).
-- **Hardware Fingerprint**: Derives a stable HMAC-SHA256 from multiple Windows hardware identifiers (e.g. MachineGuid, SMBIOS UUID, volume serial) to supply the mandatory 64-character hex digest during enrollment without transmitting or storing raw hardware identifiers.
+- **Device Fingerprint**: Derives a stable HMAC-SHA256 from multiple Windows hardware identifiers (e.g. MachineGuid, SMBIOS UUID, volume serial) to supply the mandatory 64-character hex digest during pairing without transmitting or storing raw hardware identifiers.
 - **Resilience**: Outbound-only WSS client reconnects indefinitely with exponential backoff and jitter for transient errors, halting only on terminal authentication failure.
 - **Process Management**: `mcpprocess` isolates child MCP processes with dedicated read/write queues and JSON-RPC frame validation.
 ### Frontend (React & TypeScript)
@@ -190,5 +190,5 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Fuzz Testing**: Implemented in `pkg/bridgeproto/fuzz_test.go` to test parser robustness against malformed messages.
 - **Frontend Tests**: Component and route testing using `vitest` + `@testing-library/react` + `jsdom`.
 - **E2E Production Matrix**: `internal/e2egate/matrix_test.go` runs a 14-row sequential scenario suite covering user registration, enrollment, OAuth flows, and tool execution.
-- **Trial Abuse & Entitlement Tests**: Validates trial policy and cross-account hardware fingerprint collision prevention (rejecting multi-account trial reuse on the same hardware while allowing same-owner re-enrollment and legacy `NULL` backfills).
+- **Trial Abuse & Entitlement Tests**: Validates trial policy and cross-account device fingerprint collision prevention (rejecting multi-account trial reuse on the same computer while allowing same-owner re-pairing and legacy `NULL` backfills).
 - **Verification Rule**: Always verify code changes by running targeted package tests (`go test ./internal/...`) and frontend checks (`npm test && npm run typecheck`).
