@@ -749,7 +749,7 @@ func TestRouterLimitBudgetsArePerClass(t *testing.T) {
 	// The enrollment budget is untouched.
 	res := stack.do(t, http.MethodPost, "/api/v1/device/enrollment/begin", nil,
 		http.Header{"Content-Type": []string{"application/json"}},
-		`{"device_id":"device-limit-1","hostname":"LIMIT-TEST","platform":"windows","bridge_version":"1.4.2"}`)
+		`{"device_id":"device-limit-1","hostname":"LIMIT-TEST","platform":"windows","bridge_version":"1.4.2","fingerprint_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`)
 	res.Body.Close()
 	if res.StatusCode == http.StatusTooManyRequests {
 		t.Fatal("enrollment begin rate limited by login exhaustion")
@@ -758,7 +758,7 @@ func TestRouterLimitBudgetsArePerClass(t *testing.T) {
 
 func TestRouterLimitsEnrollmentBeginBurst(t *testing.T) {
 	stack := newLimitStack(t, map[Class]Budget{ClassEnroll: testBudget(2)}, nil)
-	body := `{"device_id":"device-limit-2","hostname":"LIMIT-TEST","platform":"windows","bridge_version":"1.4.2"}`
+	body := `{"device_id":"device-limit-2","hostname":"LIMIT-TEST","platform":"windows","bridge_version":"1.4.2","fingerprint_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0"}`
 	for i := range 2 {
 		res := stack.do(t, http.MethodPost, "/api/v1/device/enrollment/begin", nil,
 			http.Header{"Content-Type": []string{"application/json"}}, body)

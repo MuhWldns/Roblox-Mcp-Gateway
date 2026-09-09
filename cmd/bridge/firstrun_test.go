@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -152,5 +153,70 @@ func TestOpenBrowserFailurePrintsManualURL(t *testing.T) {
 	fmt.Fprintf(deps.stdout, "If it did not open, open this URL manually: %s\n", "https://gateway.example/enroll?code=X")
 	if !strings.Contains(out.String(), "If it did not open, open this URL manually: https://gateway.example/enroll?code=X") {
 		t.Fatalf("fallback wording missing, got %q", out.String())
+	}
+}
+
+func TestWizardFailsTerminalOnForbiddenLicenseRequired(t *testing.T) {
+	const expectedCopy = "You don’t have a license. Please contact support to get a license."
+	var exchangeAttempts int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/enrollment/begin":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_code":        "rkuc_wizard_forbidden",
+				"verification_url": "https://gateway.example/enroll?code=rkuc_wizard_forbidden",
+				"expires_in":       600,
+			})
+		case "/api/v1/device/enrollment/exchange":
+			exchangeAttempts++
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": expectedCopy,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	localAppData := t.TempDir()
+	launcher := filepath.Join(localAppData, "Roblox", "mcp.bat")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatalf("mkdir launcher dir: %v", err)
+	}
+	if err := os.WriteFile(launcher, []byte("@echo off\r\n"), 0o600); err != nil {
+		t.Fatalf("seed launcher: %v", err)
+	}
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("BRIDGE_GATEWAY_URL", "wss"+strings.TrimPrefix(srv.URL, "https")+"/bridge")
+
+	var out bytes.Buffer
+	deps := firstRunDeps{
+		stdin:       strings.NewReader(""),
+		stdout:      &out,
+		openBrowser: func(rawURL string) error { return nil },
+		httpClient:  srv.Client(),
+	}
+
+	dir, err := bridgeconfig.Dir()
+	if err != nil {
+		t.Fatalf("config dir: %v", err)
+	}
+	configPath := filepath.Join(dir, "config.json")
+	credentialPath := filepath.Join(dir, "device.credential")
+
+	_, err = runWizard(t.Context(), deps, configPath, credentialPath, bridgeconfig.Config{})
+	if err == nil {
+		t.Fatal("runWizard must fail when exchange returns 403 Forbidden")
+	}
+	if err.Error() != expectedCopy {
+		t.Fatalf("runWizard error = %q, want %q", err.Error(), expectedCopy)
+	}
+	if exchangeAttempts != 1 {
+		t.Fatalf("exchange must not retry on 403, attempts = %d", exchangeAttempts)
+	}
+	if _, statErr := os.Stat(credentialPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("credential must never be saved when license is denied, statErr = %v", statErr)
 	}
 }

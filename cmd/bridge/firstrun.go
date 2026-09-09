@@ -226,16 +226,21 @@ func runEnrollment(ctx context.Context, deps firstRunDeps, gatewayURL, deviceID,
 	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o755); err != nil {
 		return fmt.Errorf("create credential directory: %w", err)
 	}
+	fpHash, err := bridgeapp.MachineFingerprintHash()
+	if err != nil {
+		return fmt.Errorf("identify hardware for enrollment: %w", err)
+	}
 	enrollConfig := bridgeapp.EnrollConfig{
-		APIBaseURL:    origin,
-		DeviceID:      deviceID,
-		HTTPClient:    deps.httpClient,
-		DeviceName:    hostname() + " (RobloxBridge)",
-		Hostname:      hostname(),
-		Platform:      runtime.GOOS,
-		BridgeVersion: bridgeVersion,
-		Credential:    store,
-		Output:        deps.stdout,
+		APIBaseURL:      origin,
+		DeviceID:        deviceID,
+		FingerprintHash: fpHash,
+		HTTPClient:      deps.httpClient,
+		DeviceName:      hostname() + " (RobloxBridge)",
+		Hostname:        hostname(),
+		Platform:        runtime.GOOS,
+		BridgeVersion:   bridgeVersion,
+		Credential:      store,
+		Output:          deps.stdout,
 		OnVerificationURL: func(rawURL string) {
 			fmt.Fprintln(deps.stdout, "Opening your browser for approval…")
 			if err := deps.openBrowser(rawURL); err != nil {

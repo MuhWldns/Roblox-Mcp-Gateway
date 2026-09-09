@@ -15,6 +15,9 @@ var (
 	// ErrTrialAlreadyUsed indicates the Roblox subject, across all internal
 	// accounts, has already consumed its one historical free trial.
 	ErrTrialAlreadyUsed = errors.New("entitlement: trial already used")
+	// ErrHardwareAlreadyUsed indicates enrollment was refused because the
+	// hardware fingerprint has already been used by another account.
+	ErrHardwareAlreadyUsed = errors.New("entitlement: hardware already used by another account")
 	// ErrNoSlot indicates a license has no free device slot.
 	ErrNoSlot = errors.New("entitlement: no free device slot")
 	// ErrBindingNotFound indicates a license-device binding is missing.
@@ -22,8 +25,7 @@ var (
 	// ErrInvalidExtension indicates a trial extension is not later than the
 	// current expiry.
 	ErrInvalidExtension = errors.New("entitlement: extension must be later than current expiry")
-	// ErrDeviceOwnedByOther indicates the device id is claimed by another
-	// internal account; a re-claim by the wrong owner is rejected.
+	// ErrDeviceOwnedByOther indicates the device id is claimed by another user.
 	ErrDeviceOwnedByOther = errors.New("entitlement: device owned by another user")
 )
 
@@ -34,15 +36,19 @@ type Clock interface {
 
 // FirstDeviceBinding is the atomic first-enrollment request.
 type FirstDeviceBinding struct {
-	UserID           string
-	IdentityID       string
-	Provider         string
-	ProviderSubject  string
-	DeviceID         string
-	Name             string
-	Hostname         string
-	Platform         string
-	BridgeVersion    string
+	UserID          string
+	IdentityID      string
+	Provider        string
+	ProviderSubject string
+	DeviceID        string
+	Name            string
+	Hostname        string
+	Platform        string
+	BridgeVersion   string
+	// FingerprintHash is the hex-encoded HMAC-SHA256 of the raw hardware
+	// sources (MachineGuid:SMBIOS-UUID:VolumeSerial). Empty only for legacy
+	// device rows and testing fixtures.
+	FingerprintHash  string
 	CredentialDigest [32]byte
 	AuditCorrelation string
 }

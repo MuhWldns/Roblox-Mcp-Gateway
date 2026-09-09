@@ -240,16 +240,21 @@ func runEnrollFlow(ctx context.Context, config appconfig.Enroll, out io.Writer, 
 			return fmt.Errorf("save configuration: %w", err)
 		}
 	}
+	fpHash, err := bridgeapp.MachineFingerprintHash()
+	if err != nil {
+		return fmt.Errorf("identify hardware for enrollment: %w", err)
+	}
 	return bridgeapp.RunEnroll(ctx, bridgeapp.EnrollConfig{
-		APIBaseURL:    origin,
-		DeviceID:      deviceID,
-		DeviceName:    hostname() + " (RobloxBridge)",
-		Hostname:      hostname(),
-		Platform:      runtime.GOOS,
-		BridgeVersion: bridgeVersion,
-		Credential:    store,
-		Output:        out,
-		HTTPClient:    httpClient,
+		APIBaseURL:      origin,
+		DeviceID:        deviceID,
+		FingerprintHash: fpHash,
+		DeviceName:      hostname() + " (RobloxBridge)",
+		Hostname:        hostname(),
+		Platform:        runtime.GOOS,
+		BridgeVersion:   bridgeVersion,
+		Credential:      store,
+		Output:          out,
+		HTTPClient:      httpClient,
 	})
 }
 
@@ -272,7 +277,8 @@ func gatewayAPIOrigin(gatewayURL string) (string, error) {
 	}
 }
 
-// newEnrollDeviceID generates the RFC 4122 v4 device id the enrollment claims.
+// newEnrollDeviceID returns a crypto-random UUID v4 for the device installation.
+// The installation ID is generated once and persisted in config.json.
 func newEnrollDeviceID() string {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {

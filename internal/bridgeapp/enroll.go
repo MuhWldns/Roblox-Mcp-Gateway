@@ -35,11 +35,12 @@ const (
 // credential store. The API origin must be https; enrollment never relaxes
 // TLS verification (a nil HTTPClient uses the default verified transport).
 type EnrollConfig struct {
-	APIBaseURL string
-	DeviceID   string
-	DeviceName string
-	Hostname   string
-	Platform   string
+	APIBaseURL      string
+	DeviceID        string
+	DeviceName      string
+	Hostname        string
+	Platform        string
+	FingerprintHash string
 
 	BridgeVersion string
 
@@ -89,11 +90,12 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 	}
 
 	claim, err := json.Marshal(map[string]string{
-		"device_id":      cfg.DeviceID,
-		"name":           cfg.DeviceName,
-		"hostname":       cfg.Hostname,
-		"platform":       cfg.Platform,
-		"bridge_version": cfg.BridgeVersion,
+		"device_id":        cfg.DeviceID,
+		"name":             cfg.DeviceName,
+		"hostname":         cfg.Hostname,
+		"platform":         cfg.Platform,
+		"bridge_version":   cfg.BridgeVersion,
+		"fingerprint_hash": cfg.FingerprintHash,
 	})
 	if err != nil {
 		return fmt.Errorf("bridgeapp: encode device claim: %w", err)
@@ -128,7 +130,7 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 			return fmt.Errorf("bridgeapp: enrollment interrupted: %w", err)
 		}
 		body, status, retryAfter, err := enrollPostJSONStatus(ctx, client, cfg.APIBaseURL+enrollExchangePath, exchangePayload)
-		if err != nil && status != http.StatusGone && status != http.StatusTooManyRequests {
+		if err != nil && status != http.StatusGone && status != http.StatusTooManyRequests && status != http.StatusForbidden {
 			return fmt.Errorf("bridgeapp: exchange enrollment: %w", err)
 		}
 		switch {
@@ -165,6 +167,9 @@ func RunEnroll(ctx context.Context, cfg EnrollConfig) error {
 			// platform credential store.
 			fmt.Fprintf(cfg.Output, "Enrollment complete. Device ID: %s\n", cred.DeviceID)
 			return nil
+		case status == http.StatusForbidden:
+			fmt.Fprintln(cfg.Output, defaultLicenseRequiredMsg)
+			return errors.New(defaultLicenseRequiredMsg)
 		case status == http.StatusGone:
 			return errors.New("bridgeapp: enrollment code expired before approval; run enrollment again")
 		default:
@@ -180,6 +185,9 @@ func (cfg EnrollConfig) validate() error {
 	}
 	if strings.TrimSpace(cfg.DeviceID) == "" {
 		return errors.New("bridgeapp: device id is required for enrollment")
+	}
+	if !isValidFingerprintHash(cfg.FingerprintHash) {
+		return errors.New("bridgeapp: valid 64-character hex fingerprint hash is required for enrollment")
 	}
 	if cfg.Credential == nil {
 		return errors.New("bridgeapp: credential store is required for enrollment")
@@ -232,3 +240,18 @@ func sanitizeStatusBody(body []byte) string {
 	}
 	return text
 }
+
+func isValidFingerprintHash(hash string) bool {
+	trimmed := strings.TrimSpace(hash)
+	if len(trimmed) != 64 {
+		return false
+	}
+	for _, c := range trimmed {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+const defaultLicenseRequiredMsg = "You don’t have a license. Please contact support to get a license."

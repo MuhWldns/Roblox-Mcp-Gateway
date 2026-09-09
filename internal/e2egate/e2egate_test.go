@@ -71,6 +71,10 @@ func gateUUID(t *testing.T) string {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
 }
+func gateFingerprint(identity string) string {
+	sum := sha256.Sum256([]byte("gate-fingerprint:" + identity))
+	return fmt.Sprintf("%x", sum[:])
+}
 
 func gateSafeIdentifier(s string) bool {
 	if s == "" {
@@ -1441,11 +1445,11 @@ func TestChatGPTDynamicRegistrationAndMCPOAuthFlow(t *testing.T) {
 
 	// 1. DCR: register public ChatGPT connector without pre-seeding client rows.
 	dcrPayload := map[string]any{
-		"client_name":                  "ChatGPT",
-		"redirect_uris":                []string{"https://chatgpt.com/aip/g-12345/oauth/callback"},
-		"token_endpoint_auth_method":   "none",
-		"grant_types":                  []string{"authorization_code", "refresh_token"},
-		"response_types":               []string{"code"},
+		"client_name":                "ChatGPT",
+		"redirect_uris":              []string{"https://chatgpt.com/aip/g-12345/oauth/callback"},
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 	}
 	status, dcrResp := st.newClient().postJSON(st.base+"/oauth/register", dcrPayload)
 	if status != http.StatusCreated {
@@ -1460,11 +1464,12 @@ func TestChatGPTDynamicRegistrationAndMCPOAuthFlow(t *testing.T) {
 	session := st.login("chatgpt-user-subject")
 	userID := st.userIDBySubject("chatgpt-user-subject")
 	claim := device.DeviceClaim{
-		DeviceID:      gateUUID(t),
-		Name:          "Dev Workstation",
-		Hostname:      "E2EGATE-Workstation",
-		Platform:      "windows",
-		BridgeVersion: "e2egate",
+		DeviceID:        gateUUID(t),
+		Name:            "Dev Workstation",
+		Hostname:        "E2EGATE-Workstation",
+		Platform:        "windows",
+		BridgeVersion:   "e2egate",
+		FingerprintHash: gateFingerprint("e2egate-oauth-workstation"),
 	}
 	cred, devID := st.enroll(session, claim)
 	st.seedStudio(devID, userID, "Studio Session 1")

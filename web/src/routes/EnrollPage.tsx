@@ -22,10 +22,10 @@ export default function EnrollPage() {
   const [approved, setApproved] = useState(false);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [denied, setDenied] = useState(false);
+  const [licenseRequired, setLicenseRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pollTimer = useRef<number | null>(null);
-
   const loadClaim = useCallback(async (value: string) => {
     setBusy(true);
     setError(null);
@@ -74,39 +74,83 @@ export default function EnrollPage() {
     };
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (pollTimer.current !== null) {
-        window.clearInterval(pollTimer.current);
-      }
-    };
-  }, []);
-
   // Approval and first binding are distinct server events. Poll until Bridge
-  // finishes the exchange and the server exposes the active trial.
+  // finishes the exchange and the server exposes the active trial or reports
+  // that a license is required.
   useEffect(() => {
-    if (!approved || pollTimer.current !== null) return;
+    if (!approved || licenseRequired) return;
 
+    let cancelled = false;
     let attempts = 0;
-    pollTimer.current = window.setInterval(() => {
+    const pollCode = code.trim();
+
+    const tick = async () => {
       attempts += 1;
-      getMe()
-        .then((profile) => {
-          setMe(profile);
-          if (profile.trial?.active && pollTimer.current !== null) {
-            window.clearInterval(pollTimer.current);
+
+      try {
+        const claimPromise =
+          pollCode !== ""
+            ? getEnrollmentClaim(pollCode).catch(() => null)
+            : Promise.resolve(null);
+        const mePromise = getMe().catch(() => null);
+
+        const [claimResult, meResult] = await Promise.all([
+          claimPromise,
+          mePromise,
+        ]);
+
+        if (cancelled) return;
+
+        if (claimResult && claimResult.status === "license_required") {
+          setLicenseRequired(true);
+          if (pollTimer.current !== null) {
+            window.clearTimeout(pollTimer.current);
             pollTimer.current = null;
           }
-        })
-        .catch(() => {
-          // Transient reads do not invalidate an approval already accepted.
-        });
-      if (attempts >= pollLimit && pollTimer.current !== null) {
-        window.clearInterval(pollTimer.current);
+          return;
+        }
+
+        if (meResult) {
+          setMe(meResult);
+          if (meResult.trial?.active) {
+            if (pollTimer.current !== null) {
+              window.clearTimeout(pollTimer.current);
+              pollTimer.current = null;
+            }
+            return;
+          }
+        }
+      } catch {
+        // Transient reads do not invalidate an approval already accepted.
+      }
+
+      if (cancelled) return;
+
+      if (attempts >= pollLimit) {
+        if (pollTimer.current !== null) {
+          window.clearTimeout(pollTimer.current);
+          pollTimer.current = null;
+        }
+        return;
+      }
+
+      pollTimer.current = window.setTimeout(() => {
+        void tick();
+      }, pollIntervalMs);
+    };
+
+    pollTimer.current = window.setTimeout(() => {
+      void tick();
+    }, pollIntervalMs);
+
+    return () => {
+      cancelled = true;
+      if (pollTimer.current !== null) {
+        window.clearTimeout(pollTimer.current);
         pollTimer.current = null;
       }
-    }, pollIntervalMs);
-  }, [approved]);
+    };
+  }, [approved, licenseRequired, code]);
 
   if (denied) {
     return <Navigate to={`/login?${new URLSearchParams({ next: `/enroll?${new URLSearchParams({ code })}` })}`} replace />;
@@ -195,6 +239,19 @@ export default function EnrollPage() {
             </section>
           ) : null}
         </>
+      ) : licenseRequired ? (
+        <section
+          data-testid="license-required-status"
+          aria-label="License required"
+          className="bg-white border border-border rounded-lg p-6"
+        >
+          <p role="alert" className="text-navy font-semibold mb-4">
+            You don’t have a license. Please contact support to get a license.
+          </p>
+          <Link to="/setup" className="inline-flex min-h-11 items-center underline">
+            Back to setup
+          </Link>
+        </section>
       ) : (
         <section
           data-testid="approval-status"

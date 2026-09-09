@@ -475,7 +475,7 @@ func (s *routerStack) csrfFor(t *testing.T, session *http.Cookie) (*http.Cookie,
 func beginEnrollmentHTTP(t *testing.T, s *routerStack) string {
 	t.Helper()
 	res := s.do(t, http.MethodPost, "/api/v1/device/enrollment/begin", nil, http.Header{"Content-Type": []string{"application/json"}},
-		`{"device_id":"device-http-1","hostname":"DESKTOP-HTTP","platform":"windows","bridge_version":"1.4.2"}`)
+		`{"device_id":"device-http-1","hostname":"DESKTOP-HTTP","platform":"windows","bridge_version":"1.4.2","fingerprint_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`)
 	if res.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
@@ -682,7 +682,7 @@ func TestRouterEndToEndEnrollmentStartsTrial(t *testing.T) {
 	// The Bridge begins enrollment without any credentials.
 	res := stack.do(t, http.MethodPost, "/api/v1/device/enrollment/begin", nil,
 		http.Header{"Content-Type": []string{"application/json"}},
-		`{"device_id":"device-e2e","hostname":"DESKTOP-E2E","platform":"windows","bridge_version":"1.4.2"}`)
+		`{"device_id":"device-e2e","hostname":"DESKTOP-E2E","platform":"windows","bridge_version":"1.4.2","fingerprint_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0"}`)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("begin status = %d", res.StatusCode)
 	}

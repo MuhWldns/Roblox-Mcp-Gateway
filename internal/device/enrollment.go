@@ -63,14 +63,18 @@ var (
 )
 
 // DeviceClaim is the self-asserted Bridge installation identity presented at
-// enrollment. The device id is a random installation identifier; hostname is
-// display metadata only and never part of the device identity.
+// enrollment. DeviceID is a random installation identifier persisted by the
+// Bridge. FingerprintHash is a separate HMAC-SHA256 hardware identity used to
+// prevent the same computer from claiming trials through multiple accounts.
+// Every new enrollment requires it; the database remains nullable only for
+// device rows created by older Bridge releases.
 type DeviceClaim struct {
-	DeviceID      string `json:"device_id"`
-	Name          string `json:"name"`
-	Hostname      string `json:"hostname"`
-	Platform      string `json:"platform"`
-	BridgeVersion string `json:"bridge_version"`
+	DeviceID        string `json:"device_id"`
+	Name            string `json:"name"`
+	Hostname        string `json:"hostname"`
+	Platform        string `json:"platform"`
+	BridgeVersion   string `json:"bridge_version"`
+	FingerprintHash string `json:"fingerprint_hash,omitempty"`
 }
 
 // UserCode is the short pairing code the Bridge shows to its operator.
@@ -111,6 +115,7 @@ type PendingEnrollment struct {
 	Hostname      string    `json:"hostname"`
 	Platform      string    `json:"platform"`
 	BridgeVersion string    `json:"bridge_version"`
+	Status        string    `json:"status"`
 	ExpiresAt     time.Time `json:"expires_at"`
 }
 
@@ -136,6 +141,7 @@ type FirstDeviceBinder interface {
 
 type pendingEntry struct {
 	claim      DeviceClaim
+	status     string
 	approved   bool
 	approvedBy string
 	expiresAt  time.Time
@@ -214,7 +220,7 @@ func (e *Enrollment) Begin(ctx context.Context, claim DeviceClaim) (UserCode, Ve
 		e.mu.Unlock()
 		return "", "", ErrTooManyPending
 	}
-	e.pending[key] = &pendingEntry{claim: claim, expiresAt: now.Add(e.PendingTTL)}
+	e.pending[key] = &pendingEntry{claim: claim, status: "pending", expiresAt: now.Add(e.PendingTTL)}
 	e.mu.Unlock()
 
 	return UserCode(plain), VerificationURL(verificationURL(e.VerificationBaseURL, plain)), nil
@@ -246,6 +252,7 @@ func (e *Enrollment) Lookup(ctx context.Context, userCode string) (PendingEnroll
 		Hostname:      entry.claim.Hostname,
 		Platform:      entry.claim.Platform,
 		BridgeVersion: entry.claim.BridgeVersion,
+		Status:        entry.status,
 		ExpiresAt:     entry.expiresAt,
 	}, nil
 }
@@ -293,6 +300,7 @@ func (e *Enrollment) Approve(ctx context.Context, userID, userCode string) error
 		return fmt.Errorf("device: persist enrollment code: %w", err)
 	}
 	entry.approved = true
+	entry.status = "approved"
 	entry.approvedBy = userID
 	return nil
 }
@@ -361,12 +369,19 @@ func (e *Enrollment) Exchange(ctx context.Context, deviceCode string) (DeviceCre
 		Hostname:         claim.Hostname,
 		Platform:         claim.Platform,
 		BridgeVersion:    claim.BridgeVersion,
+		FingerprintHash:  claim.FingerprintHash,
 		CredentialDigest: credentialDigest,
 		AuditCorrelation: record.ID,
 	}); err != nil {
+		if errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
+			e.mu.Lock()
+			if entry, ok := e.pending[key]; ok {
+				entry.status = "license_required"
+			}
+			e.mu.Unlock()
+		}
 		return DeviceCredential{}, err
 	}
-
 	e.mu.Lock()
 	delete(e.pending, key)
 	e.mu.Unlock()
@@ -407,6 +422,14 @@ func validateClaim(claim DeviceClaim) error {
 	}
 	if len(claim.Hostname) > 255 || len(claim.Name) > 255 || len(claim.Platform) > 64 || len(claim.BridgeVersion) > 64 {
 		return ErrInvalidClaim
+	}
+	if len(claim.FingerprintHash) != 64 {
+		return ErrInvalidClaim
+	}
+	for _, r := range claim.FingerprintHash {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return ErrInvalidClaim
+		}
 	}
 	return nil
 }

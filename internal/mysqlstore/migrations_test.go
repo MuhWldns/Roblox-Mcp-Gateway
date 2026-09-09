@@ -22,8 +22,8 @@ func TestMigrationFilesAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration filesystem: %v", err)
 	}
-	if len(entries) != 7 {
-		t.Fatalf("migration filesystem has %d entries, want 7", len(entries))
+	if len(entries) != 8 {
+		t.Fatalf("migration filesystem has %d entries, want 8", len(entries))
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {

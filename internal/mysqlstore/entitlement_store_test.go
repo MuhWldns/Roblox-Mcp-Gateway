@@ -186,6 +186,7 @@ func TestExtendTrialOnlyLengthensExpiryAndAudits(t *testing.T) {
 		Provider:         "roblox",
 		ProviderSubject:  "1516563360",
 		DeviceID:         "d1",
+		FingerprintHash:  "1111111111111111111111111111111111111111111111111111111111111111",
 		CredentialDigest: testDigest("credential"),
 		AuditCorrelation: "corr-extend",
 	})
@@ -243,6 +244,7 @@ func TestRecoveryRevokesCredentialsAndSessions(t *testing.T) {
 		Provider:         "roblox",
 		ProviderSubject:  "1516563360",
 		DeviceID:         "d1",
+		FingerprintHash:  "2222222222222222222222222222222222222222222222222222222222222222",
 		CredentialDigest: testDigest("credential"),
 	})
 	if err != nil {
@@ -306,6 +308,7 @@ func TestAuditRowsNeverContainCredentialDigest(t *testing.T) {
 		Provider:         "roblox",
 		ProviderSubject:  "1516563360",
 		DeviceID:         "d1",
+		FingerprintHash:  "3333333333333333333333333333333333333333333333333333333333333333",
 		CredentialDigest: cred,
 		AuditCorrelation: "corr-audit",
 	}); err != nil {
@@ -363,5 +366,199 @@ func TestAuditRowsNeverContainCredentialDigest(t *testing.T) {
 	}
 	if !bytes.Equal(stored, cred[:]) {
 		t.Fatal("device_credentials does not store the credential digest")
+	}
+}
+
+func TestBindFirstDeviceRejectsCrossAccountHardwareReuse(t *testing.T) {
+	store, db := newEntitlementTestStack(t)
+	fpHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	// First user succeeds.
+	cred1 := testDigest("cred-user-1")
+	_, _, err := store.BindFirstDevice(t.Context(), trialTestBase(), entitlement.FirstDeviceBinding{
+		UserID:           "user-1",
+		IdentityID:       "identity-1",
+		Provider:         "roblox",
+		ProviderSubject:  "11111",
+		DeviceID:         "dev-1",
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred1,
+		AuditCorrelation: "corr-1",
+	})
+	if err != nil {
+		t.Fatalf("first user BindFirstDevice: %v", err)
+	}
+
+	// Second user with same hardware fingerprint is rejected with ErrHardwareAlreadyUsed.
+	cred2 := testDigest("cred-user-2")
+	_, _, err = store.BindFirstDevice(t.Context(), trialTestBase(), entitlement.FirstDeviceBinding{
+		UserID:           "user-2",
+		IdentityID:       "identity-2",
+		Provider:         "roblox",
+		ProviderSubject:  "22222",
+		DeviceID:         "dev-2",
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred2,
+		AuditCorrelation: "corr-2",
+	})
+	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
+		t.Fatalf("second user error = %v, want ErrHardwareAlreadyUsed", err)
+	}
+
+	// Verify no rows created for user-2.
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM trial_entitlements WHERE user_id = 'user-2'"); got != 0 {
+		t.Fatalf("trial_entitlements for user-2 count = %d, want 0", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM trial_entitlement_identities WHERE user_id = 'user-2'"); got != 0 {
+		t.Fatalf("trial_entitlement_identities for user-2 count = %d, want 0", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM devices WHERE user_id = 'user-2'"); got != 0 {
+		t.Fatalf("devices for user-2 count = %d, want 0", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM device_credentials WHERE user_id = 'user-2'"); got != 0 {
+		t.Fatalf("device_credentials for user-2 count = %d, want 0", got)
+	}
+}
+
+func TestBindFirstDevicePermitsSameAccountReclaimWithFingerprint(t *testing.T) {
+	store, db := newEntitlementTestStack(t)
+	fpHash := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+	cred1 := testDigest("cred-reclaim-1")
+	_, _, err := store.BindFirstDevice(t.Context(), trialTestBase(), entitlement.FirstDeviceBinding{
+		UserID:           "user-reclaim",
+		IdentityID:       "identity-reclaim",
+		Provider:         "roblox",
+		ProviderSubject:  "33333",
+		DeviceID:         "dev-reclaim",
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred1,
+		AuditCorrelation: "corr-reclaim-1",
+	})
+	if err != nil {
+		t.Fatalf("initial BindFirstDevice: %v", err)
+	}
+
+	cred2 := testDigest("cred-reclaim-2")
+	_, _, err = store.BindFirstDevice(t.Context(), trialTestBase().Add(time.Hour), entitlement.FirstDeviceBinding{
+		UserID:           "user-reclaim",
+		IdentityID:       "identity-reclaim",
+		Provider:         "roblox",
+		ProviderSubject:  "33333",
+		DeviceID:         "dev-reclaim",
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred2,
+		AuditCorrelation: "corr-reclaim-2",
+	})
+	if err != nil {
+		t.Fatalf("reclaim BindFirstDevice: %v", err)
+	}
+
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM devices WHERE user_id = 'user-reclaim'"); got != 1 {
+		t.Fatalf("device count = %d, want 1", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM device_credentials WHERE user_id = 'user-reclaim' AND revoked_at IS NULL"); got != 1 {
+		t.Fatalf("active credential count = %d, want 1", got)
+	}
+}
+
+func TestBindFirstDeviceLegacyDeviceReclaimBackfillsFingerprintWithoutRestartingTrial(t *testing.T) {
+	store, db := newEntitlementTestStack(t)
+	base := trialTestBase()
+
+	// Seed initial legacy device row with NULL fingerprint_hash and an initial trial
+	userID := "user-legacy"
+	identityID := "identity-legacy"
+	deviceID := "dev-legacy"
+	robloxSubject := "44444"
+
+	cred1 := testDigest("cred-legacy-1")
+	initialEnt, _, err := store.BindFirstDevice(t.Context(), base, entitlement.FirstDeviceBinding{
+		UserID:           userID,
+		IdentityID:       identityID,
+		Provider:         "roblox",
+		ProviderSubject:  robloxSubject,
+		DeviceID:         deviceID,
+		FingerprintHash:  "", // legacy enrollment had no fingerprint
+		CredentialDigest: cred1,
+		AuditCorrelation: "corr-legacy-1",
+	})
+	if err != nil {
+		t.Fatalf("initial legacy BindFirstDevice: %v", err)
+	}
+
+	// Verify device row initially has NULL fingerprint_hash
+	var initialFp sql.NullString
+	if err := db.QueryRowContext(t.Context(), "SELECT fingerprint_hash FROM devices WHERE id = ?", deviceID).Scan(&initialFp); err != nil {
+		t.Fatalf("read legacy device fingerprint: %v", err)
+	}
+	if initialFp.Valid {
+		t.Fatalf("initial legacy device fingerprint = %q, want NULL", initialFp.String)
+	}
+
+	// Now same owner reclaims the device using a new Bridge release that supplies a fingerprint.
+	fpHash := "4444444444444444444444444444444444444444444444444444444444444444"
+	reclaimTime := base.Add(2 * time.Hour)
+	cred2 := testDigest("cred-legacy-2")
+	reclaimedEnt, binding, err := store.BindFirstDevice(t.Context(), reclaimTime, entitlement.FirstDeviceBinding{
+		UserID:           userID,
+		IdentityID:       identityID,
+		Provider:         "roblox",
+		ProviderSubject:  robloxSubject,
+		DeviceID:         deviceID,
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred2,
+		AuditCorrelation: "corr-legacy-2",
+	})
+	if err != nil {
+		t.Fatalf("reclaim legacy device with fingerprint: %v", err)
+	}
+
+	// The trial window MUST remain unchanged (started_at and ends_at match initialEnt).
+	if !reclaimedEnt.StartedAt.Equal(initialEnt.StartedAt) || !reclaimedEnt.EndsAt.Equal(initialEnt.EndsAt) {
+		t.Fatalf("trial window modified on reclaim: before (%v - %v), after (%v - %v)",
+			initialEnt.StartedAt, initialEnt.EndsAt, reclaimedEnt.StartedAt, reclaimedEnt.EndsAt)
+	}
+	if binding.Status != "active" {
+		t.Fatalf("binding status = %q, want 'active'", binding.Status)
+	}
+
+	// Verify device row now has the backfilled fingerprint_hash
+	var storedFp []byte
+	if err := db.QueryRowContext(t.Context(), "SELECT fingerprint_hash FROM devices WHERE id = ?", deviceID).Scan(&storedFp); err != nil {
+		t.Fatalf("read backfilled fingerprint: %v", err)
+	}
+	if hex.EncodeToString(storedFp) != fpHash {
+		t.Fatalf("stored fingerprint = %x, want %s", storedFp, fpHash)
+	}
+
+	// Verify exactly 1 trial row, 1 device row, and old credential revoked
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM trial_entitlements WHERE user_id = ?", userID); got != 1 {
+		t.Fatalf("trial_entitlements count = %d, want 1", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM devices WHERE user_id = ?", userID); got != 1 {
+		t.Fatalf("devices count = %d, want 1", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM device_credentials WHERE user_id = ? AND revoked_at IS NULL", userID); got != 1 {
+		t.Fatalf("active credentials count = %d, want 1", got)
+	}
+	if got := rowCount(t, db, "SELECT COUNT(*) FROM device_credentials WHERE user_id = ? AND revoked_at IS NOT NULL", userID); got != 1 {
+		t.Fatalf("revoked credentials count = %d, want 1", got)
+	}
+
+	// A second account attempting to use this newly backfilled fingerprint must be rejected with ErrHardwareAlreadyUsed.
+	cred3 := testDigest("cred-attacker")
+	_, _, err = store.BindFirstDevice(t.Context(), reclaimTime.Add(time.Hour), entitlement.FirstDeviceBinding{
+		UserID:           "user-other",
+		IdentityID:       "identity-other",
+		Provider:         "roblox",
+		ProviderSubject:  "55555",
+		DeviceID:         "dev-other",
+		FingerprintHash:  fpHash,
+		CredentialDigest: cred3,
+		AuditCorrelation: "corr-other",
+	})
+	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
+		t.Fatalf("cross-account attempt using backfilled fingerprint error = %v, want ErrHardwareAlreadyUsed", err)
 	}
 }

@@ -1,10 +1,14 @@
 package device_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -125,10 +129,11 @@ func (s *enrollmentStack) countRows(t *testing.T, query string, args ...any) int
 
 func desktopClaim(deviceID string) device.DeviceClaim {
 	return device.DeviceClaim{
-		DeviceID:      deviceID,
-		Hostname:      "DESKTOP-ABC123",
-		Platform:      "windows",
-		BridgeVersion: "1.4.2",
+		DeviceID:        deviceID,
+		Hostname:        "DESKTOP-ABC123",
+		Platform:        "windows",
+		BridgeVersion:   "1.4.2",
+		FingerprintHash: fmt.Sprintf("%064x", []byte(deviceID)),
 	}
 }
 
@@ -181,8 +186,17 @@ func TestBeginReturnsUserCodeAndVerificationURL(t *testing.T) {
 func TestBeginRejectsInvalidClaims(t *testing.T) {
 	stack := newEnrollmentStack(t)
 
-	if _, _, err := stack.enrollment.Begin(t.Context(), device.DeviceClaim{Hostname: "no-id"}); !errors.Is(err, device.ErrInvalidClaim) {
+	if _, _, err := stack.enrollment.Begin(t.Context(), device.DeviceClaim{Hostname: "no-id", FingerprintHash: strings.Repeat("a", 64)}); !errors.Is(err, device.ErrInvalidClaim) {
 		t.Fatalf("empty device id error = %v, want ErrInvalidClaim", err)
+	}
+	if _, _, err := stack.enrollment.Begin(t.Context(), device.DeviceClaim{DeviceID: "device-no-fp"}); !errors.Is(err, device.ErrInvalidClaim) {
+		t.Fatalf("missing fingerprint error = %v, want ErrInvalidClaim", err)
+	}
+	if _, _, err := stack.enrollment.Begin(t.Context(), device.DeviceClaim{DeviceID: "device-short-fp", FingerprintHash: "abcd"}); !errors.Is(err, device.ErrInvalidClaim) {
+		t.Fatalf("short fingerprint error = %v, want ErrInvalidClaim", err)
+	}
+	if _, _, err := stack.enrollment.Begin(t.Context(), device.DeviceClaim{DeviceID: "device-bad-hex", FingerprintHash: strings.Repeat("z", 64)}); !errors.Is(err, device.ErrInvalidClaim) {
+		t.Fatalf("invalid hex fingerprint error = %v, want ErrInvalidClaim", err)
 	}
 }
 
@@ -385,11 +399,12 @@ func TestExchangePersistsDeviceClaimMetadata(t *testing.T) {
 	user := stack.user(t, "1516563360")
 
 	claim := device.DeviceClaim{
-		DeviceID:      "device-meta-1",
-		Name:          "Custom Device Name",
-		Hostname:      "WORKSTATION-X",
-		Platform:      "windows",
-		BridgeVersion: "1.5.0",
+		DeviceID:        "device-meta-1",
+		Name:            "Custom Device Name",
+		Hostname:        "WORKSTATION-X",
+		Platform:        "windows",
+		BridgeVersion:   "1.5.0",
+		FingerprintHash: fmt.Sprintf("%064x", []byte("device-meta-1")),
 	}
 	code := stack.beginAndApprove(t, user, claim)
 	if _, err := stack.enrollment.Exchange(t.Context(), code); err != nil {
@@ -435,5 +450,151 @@ func TestEnrollmentConstructorRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := device.NewEnrollment(store, entSvc, []byte("pepper"), nil); err == nil {
 		t.Fatal("constructor accepted nil clock")
+	}
+}
+
+func TestCrossAccountFingerprintCollisionRejectionAndLookupTransition(t *testing.T) {
+	stack := newEnrollmentStack(t)
+	user1 := stack.user(t, "user-subject-1")
+	user2 := stack.user(t, "user-subject-2")
+
+	fpHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	// Account 1 enrolls first.
+	claim1 := desktopClaim("dev-account-1")
+	claim1.FingerprintHash = fpHash
+
+	userCode1, _, err := stack.enrollment.Begin(t.Context(), claim1)
+	if err != nil {
+		t.Fatalf("account 1 begin: %v", err)
+	}
+	pending1, err := stack.enrollment.Lookup(t.Context(), string(userCode1))
+	if err != nil {
+		t.Fatalf("account 1 initial lookup: %v", err)
+	}
+	if pending1.Status != "pending" {
+		t.Fatalf("account 1 initial status = %q, want 'pending'", pending1.Status)
+	}
+	if err := stack.enrollment.Approve(t.Context(), user1.ID, string(userCode1)); err != nil {
+		t.Fatalf("account 1 approve: %v", err)
+	}
+	pending1Approved, err := stack.enrollment.Lookup(t.Context(), string(userCode1))
+	if err != nil {
+		t.Fatalf("account 1 approved lookup: %v", err)
+	}
+	if pending1Approved.Status != "approved" {
+		t.Fatalf("account 1 approved status = %q, want 'approved'", pending1Approved.Status)
+	}
+	cred1, err := stack.enrollment.Exchange(t.Context(), string(userCode1))
+	if err != nil {
+		t.Fatalf("account 1 exchange: %v", err)
+	}
+	if cred1.Token == "" || cred1.DeviceID != "dev-account-1" {
+		t.Fatalf("account 1 credential invalid: %+v", cred1)
+	}
+
+	// Account 2 attempts to enroll with the exact same hardware fingerprint.
+	claim2 := desktopClaim("dev-account-2")
+	claim2.FingerprintHash = fpHash
+
+	userCode2, _, err := stack.enrollment.Begin(t.Context(), claim2)
+	if err != nil {
+		t.Fatalf("account 2 begin: %v", err)
+	}
+	pending2, err := stack.enrollment.Lookup(t.Context(), string(userCode2))
+	if err != nil {
+		t.Fatalf("account 2 initial lookup: %v", err)
+	}
+	if pending2.Status != "pending" {
+		t.Fatalf("account 2 initial status = %q, want 'pending'", pending2.Status)
+	}
+	if err := stack.enrollment.Approve(t.Context(), user2.ID, string(userCode2)); err != nil {
+		t.Fatalf("account 2 approve: %v", err)
+	}
+	pending2Approved, err := stack.enrollment.Lookup(t.Context(), string(userCode2))
+	if err != nil {
+		t.Fatalf("account 2 approved lookup: %v", err)
+	}
+	if pending2Approved.Status != "approved" {
+		t.Fatalf("account 2 approved status = %q, want 'approved'", pending2Approved.Status)
+	}
+
+	// Account 2 exchange must fail with ErrHardwareAlreadyUsed.
+	_, err = stack.enrollment.Exchange(t.Context(), string(userCode2))
+	if !errors.Is(err, entitlement.ErrHardwareAlreadyUsed) {
+		t.Fatalf("account 2 exchange error = %v, want ErrHardwareAlreadyUsed", err)
+	}
+
+	// Lookup must now transition to "license_required".
+	pending2LicenseRequired, err := stack.enrollment.Lookup(t.Context(), string(userCode2))
+	if err != nil {
+		t.Fatalf("account 2 lookup after collision: %v", err)
+	}
+	if pending2LicenseRequired.Status != "license_required" {
+		t.Fatalf("account 2 status after collision = %q, want 'license_required'", pending2LicenseRequired.Status)
+	}
+
+	// Verify no trial, trial identity, device, or credential row exists for account 2.
+	if got := stack.countRows(t, "SELECT COUNT(*) FROM trial_entitlements WHERE user_id = ?", user2.ID); got != 0 {
+		t.Fatalf("account 2 trial_entitlements count = %d, want 0", got)
+	}
+	if got := stack.countRows(t, "SELECT COUNT(*) FROM trial_entitlement_identities WHERE user_id = ?", user2.ID); got != 0 {
+		t.Fatalf("account 2 trial_entitlement_identities count = %d, want 0", got)
+	}
+	if got := stack.countRows(t, "SELECT COUNT(*) FROM devices WHERE user_id = ?", user2.ID); got != 0 {
+		t.Fatalf("account 2 devices count = %d, want 0", got)
+	}
+	if got := stack.countRows(t, "SELECT COUNT(*) FROM device_credentials WHERE user_id = ?", user2.ID); got != 0 {
+		t.Fatalf("account 2 device_credentials count = %d, want 0", got)
+	}
+}
+
+func TestExchangeHandlerReturnsGeneric403OnHardwareAlreadyUsed(t *testing.T) {
+	stack := newEnrollmentStack(t)
+	user1 := stack.user(t, "handler-user-1")
+	user2 := stack.user(t, "handler-user-2")
+
+	fpHash := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+	// Account 1 succeeds.
+	claim1 := desktopClaim("handler-dev-1")
+	claim1.FingerprintHash = fpHash
+	code1 := stack.beginAndApprove(t, user1, claim1)
+	if _, err := stack.enrollment.Exchange(t.Context(), code1); err != nil {
+		t.Fatalf("account 1 exchange: %v", err)
+	}
+
+	// Account 2 attempts exchange with the same fingerprint via HTTP handler.
+	claim2 := desktopClaim("handler-dev-2")
+	claim2.FingerprintHash = fpHash
+	code2 := stack.beginAndApprove(t, user2, claim2)
+
+	handler := &device.EnrollmentExchangeHandler{Enrollment: stack.enrollment}
+	body, _ := json.Marshal(map[string]string{"device_code": code2})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/enrollment/exchange", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("handler status = %d, want 403", rec.Code)
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode handler response: %v", err)
+	}
+	expectedMsg := "You don’t have a license. Please contact support to get a license."
+	if resp["error"] != expectedMsg {
+		t.Fatalf("error message = %q, want %q", resp["error"], expectedMsg)
+	}
+
+	// Response must omit technical / internal error terms.
+	bodyStr := rec.Body.String()
+	for _, technicalTerm := range []string{"ErrHardwareAlreadyUsed", "fingerprint", "collision", "trial", "SQL", "mysql", "devices"} {
+		if strings.Contains(strings.ToLower(bodyStr), strings.ToLower(technicalTerm)) {
+			t.Fatalf("handler response leaked technical term %q: %s", technicalTerm, bodyStr)
+		}
 	}
 }

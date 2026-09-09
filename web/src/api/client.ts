@@ -26,12 +26,15 @@ export interface DownloadMetadata {
   size_bytes: number;
 }
 
+export type EnrollmentClaimStatus = "pending" | "approved" | "license_required";
+
 export interface EnrollmentClaim {
   device_id: string;
   hostname: string;
   platform: string;
   bridge_version: string;
   expires_at: string;
+  status?: EnrollmentClaimStatus;
 }
 
 export interface DeviceView {

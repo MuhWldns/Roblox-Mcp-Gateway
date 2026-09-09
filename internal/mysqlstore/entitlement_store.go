@@ -3,9 +3,11 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -90,6 +92,14 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 	if in.CredentialDigest == [32]byte{} {
 		return entitlement.Entitlement{}, entitlement.Binding{}, errors.New("mysqlstore: empty credential digest")
 	}
+	var fingerprintHash []byte
+	if in.FingerprintHash != "" {
+		var parseErr error
+		fingerprintHash, parseErr = hex.DecodeString(in.FingerprintHash)
+		if parseErr != nil || len(fingerprintHash) != 32 {
+			return entitlement.Entitlement{}, entitlement.Binding{}, errors.New("mysqlstore: invalid fingerprint hash")
+		}
+	}
 	correlation, err := auditCorrelation(in.AuditCorrelation)
 	if err != nil {
 		return entitlement.Entitlement{}, entitlement.Binding{}, err
@@ -118,6 +128,21 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 	case errors.Is(err, sql.ErrNoRows):
 	default:
 		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: lock device %s: %w", in.DeviceID, err)
+	}
+	if len(fingerprintHash) != 0 {
+		var fingerprintOwner string
+		err = tx.QueryRowContext(ctx,
+			`SELECT user_id FROM devices WHERE fingerprint_hash = ? AND user_id != ? LIMIT 1 FOR UPDATE`,
+			fingerprintHash, in.UserID,
+		).Scan(&fingerprintOwner)
+		switch {
+		case err == nil:
+			return entitlement.Entitlement{}, entitlement.Binding{},
+				fmt.Errorf("mysqlstore: device hardware fingerprint already used by another account: %w", entitlement.ErrHardwareAlreadyUsed)
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: inspect device hardware fingerprint: %w", err)
+		}
 	}
 
 	var trialID string
@@ -153,14 +178,18 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 				name = CASE WHEN ? != '' THEN ? ELSE name END,
 				hostname = CASE WHEN ? != '' THEN ? ELSE hostname END,
 				platform = CASE WHEN ? != '' THEN ? ELSE platform END,
-				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END
+				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END,
+				fingerprint_hash = COALESCE(?, fingerprint_hash)
 			 WHERE id = ? AND user_id = ?`,
 			in.Name, in.Name,
 			in.Hostname, in.Hostname,
 			in.Platform, in.Platform,
 			in.BridgeVersion, in.BridgeVersion,
-			in.DeviceID, in.UserID,
+			nullableBytes(fingerprintHash), in.DeviceID, in.UserID,
 		); err != nil {
+			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
+				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -246,25 +275,33 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 			bridgeVersion = sql.NullString{String: in.BridgeVersion, Valid: true}
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO devices (id, user_id, name, hostname, platform, bridge_version, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`,
-			in.DeviceID, in.UserID, name, hostname, platform, bridgeVersion,
+			`INSERT INTO devices (id, user_id, name, hostname, platform, bridge_version, fingerprint_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+			in.DeviceID, in.UserID, name, hostname, platform, bridgeVersion, nullableBytes(fingerprintHash),
 		); err != nil {
+			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
+				return entitlement.Entitlement{}, entitlement.Binding{},
+					fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device: %w", err)
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE devices SET 
+			`UPDATE devices SET
 				name = CASE WHEN ? != '' THEN ? ELSE name END,
 				hostname = CASE WHEN ? != '' THEN ? ELSE hostname END,
 				platform = CASE WHEN ? != '' THEN ? ELSE platform END,
-				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END
+				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END,
+				fingerprint_hash = COALESCE(?, fingerprint_hash)
 			 WHERE id = ? AND user_id = ?`,
 			in.Name, in.Name,
 			in.Hostname, in.Hostname,
 			in.Platform, in.Platform,
 			in.BridgeVersion, in.BridgeVersion,
-			in.DeviceID, in.UserID,
+			nullableBytes(fingerprintHash), in.DeviceID, in.UserID,
 		); err != nil {
+			if isMySQLDuplicateKey(err, "uq_devices_fingerprint") {
+				return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device hardware fingerprint collision: %w", entitlement.ErrHardwareAlreadyUsed)
+			}
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
 		}
 	}
@@ -762,4 +799,11 @@ func ensureUser(ctx context.Context, tx *sql.Tx, userID string) error {
 func isMySQLDuplicate(err error) bool {
 	var mysqlErr *mysql.MySQLError
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
+// isMySQLDuplicateKey narrows duplicate handling to one named constraint;
+// unrelated duplicate failures retain their original error semantics.
+func isMySQLDuplicateKey(err error, key string) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && strings.Contains(mysqlErr.Message, key)
 }

@@ -181,6 +181,8 @@ func (h *EnrollmentExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, "enrollment code not found")
 		case errors.Is(err, ErrEnrollmentExpired), errors.Is(err, ErrCodeExpired):
 			writeError(w, http.StatusGone, "enrollment expired")
+		case errors.Is(err, entitlement.ErrHardwareAlreadyUsed):
+			writeError(w, http.StatusForbidden, "You don’t have a license. Please contact support to get a license.")
 		case errors.Is(err, entitlement.ErrTrialAlreadyUsed):
 			writeError(w, http.StatusForbidden, "trial already used")
 		case errors.Is(err, entitlement.ErrNoSlot):

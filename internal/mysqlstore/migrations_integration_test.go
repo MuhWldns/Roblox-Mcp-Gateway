@@ -87,9 +87,11 @@ func TestMigrationsCreateTrialAndBindingConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 7 {
-		t.Fatalf("migration version = %d, want 7", version)
+	if version != 8 {
+		t.Fatalf("migration version = %d, want 8", version)
 	}
+	assertNamedUniqueIndex(t, db, "devices", "uq_devices_fingerprint", "fingerprint_hash")
+	assertBinaryDigest(t, db, "devices", "fingerprint_hash")
 	assertBinaryDigest(t, db, "web_sessions", "token_digest")
 	assertNoPlaintextTokenColumns(t, db)
 }
@@ -154,6 +156,37 @@ func assertUniqueIndex(t *testing.T, db *sql.DB, table string, columns ...string
 	t.Fatalf("%s lacks unique index on (%s)", table, strings.Join(columns, ", "))
 }
 
+func assertNamedUniqueIndex(t *testing.T, db *sql.DB, table, indexName string, columns ...string) {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), `SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? ORDER BY seq_in_index`, table, indexName)
+	if err != nil {
+		t.Fatalf("inspect index %s on %s: %v", indexName, table, err)
+	}
+	defer rows.Close()
+	var gotColumns []string
+	isUnique := true
+	for rows.Next() {
+		var name, column string
+		var nonUnique, seq int
+		if err := rows.Scan(&name, &nonUnique, &seq, &column); err != nil {
+			t.Fatalf("scan index %s on %s: %v", indexName, table, err)
+		}
+		if nonUnique != 0 {
+			isUnique = false
+		}
+		gotColumns = append(gotColumns, column)
+	}
+	if len(gotColumns) == 0 {
+		t.Fatalf("%s lacks index %s", table, indexName)
+	}
+	if !isUnique {
+		t.Fatalf("index %s on %s is not unique", indexName, table)
+	}
+	if !equalStrings(gotColumns, columns) {
+		t.Fatalf("index %s on %s covers (%s), want (%s)", indexName, table, strings.Join(gotColumns, ", "), strings.Join(columns, ", "))
+	}
+}
+
 func assertForeignKey(t *testing.T, db *sql.DB, table, column string) {
 	t.Helper()
 	var count int
@@ -168,11 +201,15 @@ func assertForeignKey(t *testing.T, db *sql.DB, table, column string) {
 func assertBinaryDigest(t *testing.T, db *sql.DB, table, column string) {
 	t.Helper()
 	var dataType string
-	if err := db.QueryRowContext(t.Context(), `SELECT data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&dataType); err != nil {
+	var length int
+	if err := db.QueryRowContext(t.Context(), `SELECT data_type, character_octet_length FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&dataType, &length); err != nil {
 		t.Fatalf("inspect digest column: %v", err)
 	}
 	if dataType != "binary" {
 		t.Fatalf("%s.%s data type = %q, want binary", table, column, dataType)
+	}
+	if length != 32 {
+		t.Fatalf("%s.%s binary octet length = %d, want 32", table, column, length)
 	}
 }
 

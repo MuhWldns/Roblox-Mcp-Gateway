@@ -481,6 +481,67 @@ func TestDashboardStoreRevokeConnector(t *testing.T) {
 	}
 }
 
+func TestDashboardStoreRestoreDevice(t *testing.T) {
+	store, db := newDashboardTestStore(t)
+	ctx := t.Context()
+
+	userA := dashboardSeedUser(t, db)
+	userB := dashboardSeedUser(t, db)
+	deviceA := dashboardSeedDevice(t, db, userA, "Revoked Device")
+	dashboardSeedCredential(t, db, userA, deviceA)
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	// First revoke the device
+	if err := store.RevokeDevice(ctx, "corr-rev", now, userA, deviceA); err != nil {
+		t.Fatalf("RevokeDevice: %v", err)
+	}
+
+	// Foreign user cannot restore userA's device
+	if err := store.RestoreDevice(ctx, "corr-foreign", now, userB, deviceA); !errors.Is(err, dashboard.ErrNotFound) {
+		t.Fatalf("foreign restore error = %v, want ErrNotFound", err)
+	}
+
+	// UserA restores the device
+	if err := store.RestoreDevice(ctx, "corr-rest-1", now, userA, deviceA); err != nil {
+		t.Fatalf("RestoreDevice: %v", err)
+	}
+
+	// Status must be active in DB
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM devices WHERE id = ?`, deviceA).Scan(&status); err != nil {
+		t.Fatalf("query restored device status: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("restored device status = %q, want %q", status, "active")
+	}
+
+	// Old credentials must remain revoked for security
+	var credRevoked sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT revoked_at FROM device_credentials WHERE device_id = ?`, deviceA).Scan(&credRevoked); err != nil {
+		t.Fatalf("query credential revoked_at: %v", err)
+	}
+	if !credRevoked.Valid {
+		t.Fatal("device credentials must remain revoked after device restore")
+	}
+
+	// Check audit event
+	events := dashboardAudit(t, db, "device.restore")
+	if len(events) != 1 || events[0].CorrelationID != "corr-rest-1" || events[0].TargetID != deviceA {
+		t.Fatalf("device.restore events = %+v", events)
+	}
+	if events[0].Before["status"] != "revoked" || events[0].After["status"] != "active" {
+		t.Fatalf("unexpected before/after in audit: %+v", events[0])
+	}
+
+	// Restoring an already active device is idempotent and does not emit a second audit event
+	if err := store.RestoreDevice(ctx, "corr-rest-2", now.Add(time.Minute), userA, deviceA); err != nil {
+		t.Fatalf("idempotent restore error: %v", err)
+	}
+	if events := dashboardAudit(t, db, "device.restore"); len(events) != 1 {
+		t.Fatalf("device.restore emitted duplicate audit event: %d events", len(events))
+	}
+}
+
 func revokedAtOf(t *testing.T, db *sql.DB, table, id string) sql.NullTime {
 	t.Helper()
 	var revoked sql.NullTime

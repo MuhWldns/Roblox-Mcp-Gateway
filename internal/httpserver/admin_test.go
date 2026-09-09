@@ -909,3 +909,42 @@ func TestAdminExtensionRequiresTrialAndValidInput(t *testing.T) {
 		t.Fatalf("ends_at after rejected extensions = %q", got)
 	}
 }
+
+func TestAdminRestoreAndDisconnectDevice(t *testing.T) {
+	stack := newAdminStack(t)
+	user, _ := stack.login(t, "device-owner")
+	stack.insertDevice(t, user.ID, "dev-test-1", "revoked")
+
+	// Non-admin cannot restore
+	nonAdminUser, nonAdminCookie := stack.login(t, "regular-user")
+	_ = nonAdminUser
+	nonAdminCookies, nonAdminHeader := mutationCookies(t, stack.routerStack, nonAdminCookie)
+	res := stack.do(t, http.MethodPost, "/api/v1/admin/devices/restore", nonAdminCookies, nonAdminHeader,
+		`{"user_id":"`+user.ID+`","device_id":"dev-test-1"}`)
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin restore status = %d, want 403", res.StatusCode)
+	}
+
+	// Admin restores revoked device
+	res = stack.postAdmin(t, "/api/v1/admin/devices/restore",
+		`{"user_id":"`+user.ID+`","device_id":"dev-test-1"}`)
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin restore status = %d body=%q, want 204", res.StatusCode, stack.errorBody(t, res))
+	}
+
+	// Status is active in DB
+	if got := stack.nullString(t, `SELECT status FROM devices WHERE id = 'dev-test-1'`).String; got != "active" {
+		t.Fatalf("device status after restore = %q, want active", got)
+	}
+
+	// Admin disconnects device
+	stack.fake.setOnline("dev-test-1", true)
+	res = stack.postAdmin(t, "/api/v1/admin/devices/disconnect",
+		`{"user_id":"`+user.ID+`","device_id":"dev-test-1"}`)
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin disconnect status = %d, want 204", res.StatusCode)
+	}
+	if stack.log.position("disconnect:dev-test-1") < 0 {
+		t.Fatal("disconnect was not logged by registry")
+	}
+}

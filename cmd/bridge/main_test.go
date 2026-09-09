@@ -337,3 +337,114 @@ func TestStudioReadyAfterVerifiedMCPCallReportsOneStudio(t *testing.T) {
 		t.Fatalf("studioReadyAfterVerifiedMCPCall() = %d, want exactly 1", count)
 	}
 }
+
+// TestRunEnrollFlowForbiddenLicenseRequired proves that when the gateway returns
+// HTTP 403 on enrollment exchange, runEnrollFlow terminates immediately with the
+// exact user-facing error message, outputs the message, performs no further polling,
+// and never saves a credential.
+func TestRunEnrollFlowForbiddenLicenseRequired(t *testing.T) {
+	const expectedCopy = "You don’t have a license. Please contact support to get a license."
+	var exchangeAttempts int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/enrollment/begin":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_code":        "rkuc_license_denied",
+				"verification_url": "https://gateway.example/enroll?code=rkuc_license_denied",
+				"expires_in":       600,
+			})
+		case "/api/v1/device/enrollment/exchange":
+			exchangeAttempts++
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": expectedCopy,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", dir)
+	credentialPath := filepath.Join(dir, "device.credential")
+	config, err := appconfig.LoadEnroll(getenvWith(map[string]string{
+		"BRIDGE_GATEWAY_URL":     "wss" + strings.TrimPrefix(srv.URL, "https") + "/bridge",
+		"BRIDGE_CREDENTIAL_PATH": credentialPath,
+	}))
+	if err != nil {
+		t.Fatalf("LoadEnroll: %v", err)
+	}
+
+	var out bytes.Buffer
+	err = runEnrollFlow(t.Context(), config, &out, srv.Client())
+	if err == nil {
+		t.Fatal("runEnrollFlow must fail on 403 Forbidden")
+	}
+	if err.Error() != expectedCopy {
+		t.Fatalf("runEnrollFlow error = %q, want exact %q", err.Error(), expectedCopy)
+	}
+	if got := strings.Count(out.String(), expectedCopy); got != 1 {
+		t.Fatalf("output must contain %q exactly once, got %d times in %q", expectedCopy, got, out.String())
+	}
+	if exchangeAttempts != 1 {
+		t.Fatalf("403 must be terminal and never retried, exchange attempts = %d", exchangeAttempts)
+	}
+	if _, statErr := os.Stat(credentialPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("no credential file may be saved when license is denied, statErr = %v", statErr)
+	}
+}
+
+// TestRunEnrollFlowBeginSendsMachineFingerprintHash proves that runEnrollFlow includes
+// the 64-character hex machine fingerprint hash in the begin payload.
+func TestRunEnrollFlowBeginSendsMachineFingerprintHash(t *testing.T) {
+	var beginPayload map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/enrollment/begin":
+			_ = json.NewDecoder(r.Body).Decode(&beginPayload)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"user_code":        "rkuc_fp_test",
+				"verification_url": "https://gateway.example/enroll?code=rkuc_fp_test",
+				"expires_in":       600,
+			})
+		case "/api/v1/device/enrollment/exchange":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"device_credential": "rkd_fp_secret",
+				"device_id":         "device-fp-1",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", dir)
+	credentialPath := filepath.Join(dir, "device.credential")
+	config, err := appconfig.LoadEnroll(getenvWith(map[string]string{
+		"BRIDGE_GATEWAY_URL":     "wss" + strings.TrimPrefix(srv.URL, "https") + "/bridge",
+		"BRIDGE_CREDENTIAL_PATH": credentialPath,
+	}))
+	if err != nil {
+		t.Fatalf("LoadEnroll: %v", err)
+	}
+
+	var out bytes.Buffer
+	err = runEnrollFlow(t.Context(), config, &out, srv.Client())
+	if err != nil {
+		t.Fatalf("runEnrollFlow: %v", err)
+	}
+
+	fpHash, ok := beginPayload["fingerprint_hash"].(string)
+	if !ok || len(fpHash) != 64 {
+		t.Fatalf("begin payload must contain 64-char hex fingerprint_hash, got %v", beginPayload["fingerprint_hash"])
+	}
+	for _, c := range fpHash {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			t.Fatalf("fingerprint_hash contains non-hex char %c: %s", c, fpHash)
+		}
+	}
+}

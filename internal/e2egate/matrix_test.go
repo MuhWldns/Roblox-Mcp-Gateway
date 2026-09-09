@@ -26,11 +26,12 @@ func TestE2EProductionMatrix(t *testing.T) {
 	st := newLiveStack(t)
 	claim := func(name string) device.DeviceClaim {
 		return device.DeviceClaim{
-			DeviceID:      gateUUID(t), // devices.id is CHAR(36)
-			Name:          name,
-			Hostname:      "E2EGATE-" + name,
-			Platform:      "windows",
-			BridgeVersion: "e2egate",
+			DeviceID:        gateUUID(t), // devices.id is CHAR(36)
+			Name:            name,
+			Hostname:        "E2EGATE-" + name,
+			Platform:        "windows",
+			BridgeVersion:   "e2egate",
+			FingerprintHash: gateFingerprint("matrix-" + name),
 		}
 	}
 
@@ -736,7 +737,7 @@ func (st *liveStack) connectorFlow(session *liveClient, clientID, redirect, devi
 	form.Set("device_id", deviceID)
 	form.Set("studio_session_id", studioSessionID)
 	form.Set("csrf_token", csrfToken)
-		// grant list ignored by server; exact requested scope package is granted
+	// grant list ignored by server; exact requested scope package is granted
 	resp = session.do(http.MethodPost, st.base+"/oauth/authorize", strings.NewReader(form.Encode()),
 		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Cookie": consentCookie})
 	if resp.StatusCode != http.StatusSeeOther {

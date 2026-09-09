@@ -93,15 +93,16 @@ func testEnrollConfig(base string, store *recordingEnrollStore, out io.Writer) E
 		HTTPClient: &http.Client{Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local test server only
 		}},
-		APIBaseURL:    base,
-		DeviceID:      "device-enroll-test",
-		DeviceName:    "Enroll Test Device",
-		Hostname:      "HOST-E2E",
-		Platform:      "windows",
-		BridgeVersion: "test-bridge",
-		Credential:    store,
-		Output:        out,
-		PollInterval:  5 * time.Millisecond,
+		APIBaseURL:      base,
+		DeviceID:        "device-enroll-test",
+		DeviceName:      "Enroll Test Device",
+		Hostname:        "HOST-E2E",
+		Platform:        "windows",
+		FingerprintHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		BridgeVersion:   "test-bridge",
+		Credential:      store,
+		Output:          out,
+		PollInterval:    5 * time.Millisecond,
 	}
 }
 
@@ -175,6 +176,7 @@ func TestRunEnrollSendsClaimPayload(t *testing.T) {
 	for key, want := range map[string]string{
 		"device_id": "device-enroll-test", "name": "Enroll Test Device",
 		"hostname": "HOST-E2E", "platform": "windows", "bridge_version": "test-bridge",
+		"fingerprint_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	} {
 		if got, _ := claim[key].(string); got != want {
 			t.Fatalf("claim %q = %q, want %q (body %s)", key, got, want, body)
@@ -322,5 +324,110 @@ func TestRunEnrollRequiresStore(t *testing.T) {
 	cfg := testEnrollConfig("https://gateway.example", nil, io.Discard)
 	if err := RunEnroll(context.Background(), cfg); err == nil {
 		t.Fatal("RunEnroll without a credential store must fail")
+	}
+}
+
+// TestRunEnrollRequiresValidFingerprintHash proves that empty or malformed
+// fingerprint hashes are refused during config validation before network requests.
+func TestRunEnrollRequiresValidFingerprintHash(t *testing.T) {
+	store := &recordingEnrollStore{}
+	cases := []struct {
+		name string
+		hash string
+	}{
+		{"empty", ""},
+		{"too short", "0123456789abcdef"},
+		{"too long", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef12"},
+		{"non-hex", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testEnrollConfig("https://gateway.example", store, io.Discard)
+			cfg.FingerprintHash = tc.hash
+			err := RunEnroll(context.Background(), cfg)
+			if err == nil {
+				t.Fatalf("expected error for fingerprint %q, got nil", tc.hash)
+			}
+			if store.saved != nil {
+				t.Fatal("no credential may be saved when fingerprint validation fails")
+			}
+		})
+	}
+}
+
+// TestRunEnrollExchangeForbiddenLicenseRequired proves that on HTTP 403,
+// the exact user-facing message is parsed, printed to Output, returned as a terminal error
+// without retry, and zero credentials are saved.
+func TestRunEnrollExchangeForbiddenLicenseRequired(t *testing.T) {
+	const expectedCopy = "You don’t have a license. Please contact support to get a license."
+	srv := newEnrollServer(t, func(_ int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": expectedCopy,
+		})
+	})
+	store := &recordingEnrollStore{}
+	var out strings.Builder
+	cfg := testEnrollConfig(srv.server.URL, store, &out)
+
+	err := RunEnroll(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("RunEnroll must fail on 403 Forbidden")
+	}
+	if err.Error() != expectedCopy {
+		t.Fatalf("RunEnroll error = %q, want %q", err.Error(), expectedCopy)
+	}
+	if got := strings.Count(out.String(), expectedCopy); got != 1 {
+		t.Fatalf("output must contain %q exactly once, got %d times in %q", expectedCopy, got, out.String())
+	}
+	// Assert internal details / prefixes / status codes are absent from the returned error.
+	for _, forbidden := range []string{"403", "status", "forbidden", "fingerprint", "collision", "trial", "bridgeapp:"} {
+		if strings.Contains(strings.ToLower(err.Error()), forbidden) {
+			t.Fatalf("returned error leaked technical detail %q: %q", forbidden, err.Error())
+		}
+		if strings.Contains(strings.ToLower(out.String()), forbidden) {
+			t.Fatalf("output leaked technical detail %q: %q", forbidden, out.String())
+		}
+	}
+	if n := srv.exchangeCount(); n != 1 {
+		t.Fatalf("403 must be terminal and never retried, exchange attempts = %d", n)
+	}
+	if store.saved != nil {
+		t.Fatal("no credential may be saved when license is denied")
+	}
+}
+
+// TestRunEnrollExchangeForbiddenSanitizesArbitraryHTML proves that arbitrary HTML
+// or unstructured bodies on 403 are not blindly printed or returned.
+func TestRunEnrollExchangeForbiddenSanitizesArbitraryHTML(t *testing.T) {
+	const expectedCopy = "You don’t have a license. Please contact support to get a license."
+	srv := newEnrollServer(t, func(_ int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<html><body><h1>403 Forbidden - Internal Gateway Error</h1></body></html>"))
+	})
+	store := &recordingEnrollStore{}
+	var out strings.Builder
+	cfg := testEnrollConfig(srv.server.URL, store, &out)
+
+	err := RunEnroll(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("RunEnroll must fail on 403 Forbidden")
+	}
+	if err.Error() != expectedCopy {
+		t.Fatalf("RunEnroll error on HTML 403 = %q, want fallback %q", err.Error(), expectedCopy)
+	}
+	if strings.Contains(out.String(), "<html>") {
+		t.Fatalf("output must not print raw HTML: %q", out.String())
+	}
+	if !strings.Contains(out.String(), expectedCopy) {
+		t.Fatalf("output must contain fallback copy %q, got %q", expectedCopy, out.String())
+	}
+	if n := srv.exchangeCount(); n != 1 {
+		t.Fatalf("403 must be terminal and never retried, exchange attempts = %d", n)
+	}
+	if store.saved != nil {
+		t.Fatal("no credential may be saved when license is denied")
 	}
 }

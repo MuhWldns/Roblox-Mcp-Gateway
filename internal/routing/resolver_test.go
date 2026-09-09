@@ -114,3 +114,33 @@ func TestResolveOfflineDeviceRejected(t *testing.T) {
 	// A grant without a device has nothing online.
 	mustReject(t, makeGrant("", ""), makeRequest(""), studiosOnline("d1", "s1"), ErrDeviceOffline)
 }
+
+func TestResolveEdgeCases(t *testing.T) {
+	// Empty studio ID explicitly requested on device with 1 studio -> sole online studio selected
+	mustResolve(t, makeGrant("d1", ""), makeRequest(""), studiosOnline("d1", "sole-studio"), "d1", "sole-studio")
+
+	// Explicit request for studio that exists on granted device AND another device -> resolves to granted device
+	mustResolve(t, makeGrant("d1", ""), makeRequest("s-common"),
+		[]Studio{{StudioID: "s-common", DeviceID: "d1"}, {StudioID: "s-common", DeviceID: "d2"}},
+		"d1", "s-common")
+
+	// Unbound grant with multiple duplicate studio IDs on the same device is ambiguous
+	mustReject(t, makeGrant("d1", ""), makeRequest(""),
+		[]Studio{{StudioID: "s1", DeviceID: "d1"}, {StudioID: "s2", DeviceID: "d1"}},
+		ErrAmbiguousStudio)
+
+	// Bound grant to s1 when s1 and s2 exist on d1 -> resolves to bound studio s1 without explicit request
+	mustResolve(t, makeGrant("d1", "s1"), makeRequest(""),
+		[]Studio{{StudioID: "s1", DeviceID: "d1"}, {StudioID: "s2", DeviceID: "d1"}},
+		"d1", "s1")
+
+	// Bound grant to s1 when s1 is offline on d1 but online on d2 -> ErrCrossDeviceStudio
+	mustReject(t, makeGrant("d1", "s1"), makeRequest(""),
+		[]Studio{{StudioID: "s1", DeviceID: "d2"}},
+		ErrCrossDeviceStudio)
+
+	// Bound grant to s1 when s1 is offline everywhere -> ErrStudioOffline
+	mustReject(t, makeGrant("d1", "s1"), makeRequest(""),
+		[]Studio{{StudioID: "s2", DeviceID: "d1"}},
+		ErrStudioOffline)
+}

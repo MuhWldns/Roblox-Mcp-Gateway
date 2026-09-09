@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 
@@ -108,6 +108,7 @@ describe("onboarding web flow", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("redirects unauthenticated visitors to the login page", async () => {
@@ -173,7 +174,7 @@ describe("onboarding web flow", () => {
   });
 
   it("shows the first-binding trial state once the device completes its exchange", async () => {
-    installFetch({
+    const calls = installFetch({
       [meUrl]: [{ json: freshMe }, { json: freshMe }, { json: activeTrialMe }],
       [claimUrl]: { json: claim },
       [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
@@ -182,13 +183,80 @@ describe("onboarding web flow", () => {
 
     renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
 
-    await userEvent.click(await screen.findByRole("button", { name: /approve/i }));
+    expect(await screen.findByTestId("device-hostname")).toBeTruthy();
+    expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("approval-status")).toBeTruthy();
+      expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+    });
 
     const trial = await screen.findByTestId("trial-state", {}, { timeout: 5000 });
     expect(trial.textContent).toMatch(/free trial active/i);
     expect(trial.textContent).toMatch(/2026-09-18/);
+    expect(screen.queryByText("Waiting for your computer to finish connecting…")).toBeNull();
+
+    // Ensure polling stops once active trial is received
+    const callCountAtCompletion = calls.length;
+    const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
+    setTimeout(delayResolve, 1200);
+    await delayPromise;
+    expect(calls.length).toBe(callCountAtCompletion);
   });
 
+  it("transitions from approved to terminal denial when claim status becomes license_required and stops polling", async () => {
+    const calls = installFetch({
+      [meUrl]: { json: freshMe },
+      [claimUrl]: [
+        { json: { ...claim, status: "pending" } },
+        { json: { ...claim, status: "pending" } },
+        { json: { ...claim, status: "license_required" } },
+      ],
+      [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
+      [approveUrl]: { status: 204 },
+    });
+
+    renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
+
+    expect(await screen.findByTestId("device-hostname")).toBeTruthy();
+    expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    // Initially approved state is rendered with indefinite waiting copy
+    await waitFor(() => {
+      expect(screen.getByTestId("approval-status")).toBeTruthy();
+      expect(screen.getByText("Computer approved")).toBeTruthy();
+      expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+      expect(screen.queryByTestId("license-required-status")).toBeNull();
+    });
+
+    // Once license_required is returned, terminal denial is rendered
+    const denialSection = await screen.findByTestId("license-required-status", {}, { timeout: 5000 });
+    const alert = screen.getByRole("alert");
+
+    // Exact operator-facing denial copy
+    expect(alert.textContent).toBe("You don’t have a license. Please contact support to get a license.");
+    expect(within(denialSection).getByRole("link", { name: /back to setup/i }).getAttribute("href")).toBe("/setup");
+
+    // The indefinite waiting copy and approval status disappear
+    expect(screen.queryByTestId("approval-status")).toBeNull();
+    expect(screen.queryByText("Computer approved")).toBeNull();
+    expect(screen.queryByText("Waiting for your computer to finish connecting…")).toBeNull();
+
+    // Ensure no technical language or internal details leaked
+    const pageContent = denialSection.textContent ?? "";
+    expect(pageContent).not.toMatch(/fingerprint|collision|trial[-_ ]reuse|status|code|403|409|json|api/i);
+
+    // Record call count after denial and ensure polling has stopped
+    const callCountAtDenial = calls.length;
+    const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
+    setTimeout(delayResolve, 1200);
+    await delayPromise;
+    expect(calls.length).toBe(callCountAtDenial);
+  });
   it("never persists credentials or tokens in browser storage", async () => {
     const calls = installFetch({
       [meUrl]: { json: activeTrialMe },
