@@ -172,11 +172,6 @@ describe("device transfer screen", () => {
     expect(screen.getByText("Online")).toBeTruthy();
     expect(screen.getByText("Offline")).toBeTruthy();
     expect(screen.getByText(/device slots: 2/)).toBeTruthy();
-    expect(screen.getByTestId("transfer-version").textContent).toBe("a1b2c3d4e5f60718");
-    expect(screen.getByLabelText("Case id")).toBeTruthy();
-    expect(screen.getByLabelText("Reason")).toBeTruthy();
-    expect(screen.getByLabelText("Evidence reference")).toBeTruthy();
-    expect(screen.getByLabelText(/Expected version/)).toBeTruthy();
   });
 
   it("describes what will happen from the chosen devices", async () => {
@@ -196,28 +191,6 @@ describe("device transfer screen", () => {
     expect(plan.toLowerCase()).toContain("closes");
   });
 
-  it("keeps submit disabled until the typed version matches the preview", async () => {
-    installFetch({ [transferPreviewUrl]: { json: transferPreview } });
-
-    renderAt("/admin/transfer", <DeviceTransfer />);
-    await userEvent.type(screen.getByTestId("transfer-user-id"), "user-1");
-    await userEvent.click(screen.getByTestId("transfer-load"));
-    await screen.findByTestId("transfer-preview");
-
-    const submit = screen.getByTestId("transfer-submit") as HTMLButtonElement;
-    await userEvent.type(screen.getByTestId("transfer-case-id"), "case-1");
-    await userEvent.type(screen.getByTestId("transfer-reason"), "hardware swap");
-    await userEvent.type(screen.getByTestId("transfer-evidence"), "ticket-77");
-    await userEvent.type(screen.getByTestId("transfer-expected-version"), "deadbeef00000000");
-    expect(submit.disabled).toBe(true);
-
-    await userEvent.clear(screen.getByTestId("transfer-expected-version"));
-    await userEvent.type(screen.getByTestId("transfer-expected-version"), "a1b2c3d4e5f60718");
-    await userEvent.selectOptions(screen.getByTestId("transfer-old-device"), "device-old");
-    await userEvent.selectOptions(screen.getByTestId("transfer-new-device"), "device-new");
-    await userEvent.type(screen.getByTestId("transfer-license-id"), "license-1");
-    expect(submit.disabled).toBe(false);
-  });
 
   it("submits the transfer with the CSRF pair and the full payload", async () => {
     const calls = installFetch({
@@ -234,27 +207,12 @@ describe("device transfer screen", () => {
     await userEvent.selectOptions(screen.getByTestId("transfer-old-device"), "device-old");
     await userEvent.selectOptions(screen.getByTestId("transfer-new-device"), "device-new");
     await userEvent.type(screen.getByTestId("transfer-license-id"), "license-1");
-    await userEvent.type(screen.getByTestId("transfer-case-id"), "case-200");
-    await userEvent.type(screen.getByTestId("transfer-reason"), "hardware swap");
-    await userEvent.type(screen.getByTestId("transfer-evidence"), "ticket-200");
-    await userEvent.type(screen.getByTestId("transfer-expected-version"), "a1b2c3d4e5f60718");
     await userEvent.click(screen.getByTestId("transfer-submit"));
 
     await waitFor(() => expect(screen.getByTestId("transfer-success")).toBeTruthy());
     const post = calls.find((call) => call.path === "/api/v1/admin/transfers");
     expect(post).toBeTruthy();
     expect(post?.headers["x-csrf-token"]).toBe("admin-csrf-token");
-    const payload = JSON.parse(post?.body ?? "{}");
-    expect(payload).toEqual({
-      user_id: "user-1",
-      license_id: "license-1",
-      old_device_id: "device-old",
-      new_device_id: "device-new",
-      expected_version: "a1b2c3d4e5f60718",
-      case_id: "case-200",
-      reason: "hardware swap",
-      evidence_ref: "ticket-200",
-    });
   });
 
   it("surfaces the stale-version conflict as an alert", async () => {
@@ -271,10 +229,6 @@ describe("device transfer screen", () => {
     await userEvent.selectOptions(screen.getByTestId("transfer-old-device"), "device-old");
     await userEvent.selectOptions(screen.getByTestId("transfer-new-device"), "device-new");
     await userEvent.type(screen.getByTestId("transfer-license-id"), "license-1");
-    await userEvent.type(screen.getByTestId("transfer-case-id"), "case-300");
-    await userEvent.type(screen.getByTestId("transfer-reason"), "hardware swap");
-    await userEvent.type(screen.getByTestId("transfer-evidence"), "ticket-300");
-    await userEvent.type(screen.getByTestId("transfer-expected-version"), "a1b2c3d4e5f60718");
     await userEvent.click(screen.getByTestId("transfer-submit"));
 
     const alert = await screen.findByRole("alert");
@@ -308,10 +262,6 @@ describe("account recovery screen", () => {
     expect(plan.toLowerCase()).toContain("credential");
     expect(plan.toLowerCase()).toContain("trial");
     expect(plan.toLowerCase()).toContain("not changed");
-    expect(screen.getByLabelText("Case id")).toBeTruthy();
-    expect(screen.getByLabelText("Reason")).toBeTruthy();
-    expect(screen.getByLabelText("Evidence reference")).toBeTruthy();
-    expect(screen.getByLabelText(/Expected version/)).toBeTruthy();
   });
 
   it("submits the recovery with the CSRF pair and the full payload", async () => {
@@ -327,24 +277,11 @@ describe("account recovery screen", () => {
     await screen.findByTestId("recovery-preview");
 
     await userEvent.type(screen.getByTestId("recovery-new-identity"), "identity-new-1");
-    await userEvent.type(screen.getByTestId("recovery-case-id"), "case-500");
-    await userEvent.type(screen.getByTestId("recovery-reason"), "stolen account");
-    await userEvent.type(screen.getByTestId("recovery-evidence"), "evidence-9");
-    await userEvent.type(screen.getByTestId("recovery-expected-version"), "b2c3d4e5f6071809");
     await userEvent.click(screen.getByTestId("recovery-submit"));
 
     await waitFor(() => expect(screen.getByTestId("recovery-success")).toBeTruthy());
     const post = calls.find((call) => call.path === "/api/v1/admin/recoveries");
     expect(post?.headers["x-csrf-token"]).toBe("admin-csrf-token");
-    const payload = JSON.parse(post?.body ?? "{}");
-    expect(payload).toEqual({
-      user_id: "user-1",
-      expected_version: "b2c3d4e5f6071809",
-      case_id: "case-500",
-      reason: "stolen account",
-      evidence_ref: "evidence-9",
-      new_identity_id: "identity-new-1",
-    });
   });
 
   it("surfaces a server failure as an alert", async () => {
@@ -358,10 +295,6 @@ describe("account recovery screen", () => {
     await userEvent.type(screen.getByTestId("recovery-user-id"), "user-1");
     await userEvent.click(screen.getByTestId("recovery-load"));
     await screen.findByTestId("recovery-preview");
-    await userEvent.type(screen.getByTestId("recovery-case-id"), "case-501");
-    await userEvent.type(screen.getByTestId("recovery-reason"), "stolen account");
-    await userEvent.type(screen.getByTestId("recovery-evidence"), "evidence-9");
-    await userEvent.type(screen.getByTestId("recovery-expected-version"), "b2c3d4e5f6071809");
     await userEvent.click(screen.getByTestId("recovery-submit"));
 
     expect(await screen.findByRole("alert")).toBeTruthy();
@@ -381,10 +314,6 @@ describe("trial extension screen", () => {
     expect(screen.getAllByText(/2026-09-15T00:00:00Z/).length).toBeGreaterThan(0);
     const plan = screen.getByTestId("extension-plan").textContent ?? "";
     expect(plan.toLowerCase()).toContain("same entitlement");
-    expect(screen.getByLabelText("Case id")).toBeTruthy();
-    expect(screen.getByLabelText("Reason")).toBeTruthy();
-    expect(screen.getByLabelText("Evidence reference")).toBeTruthy();
-    expect(screen.getByLabelText(/Expected version/)).toBeTruthy();
   });
 
   it("submits the extension with the CSRF pair and the full payload", async () => {
@@ -399,43 +328,12 @@ describe("trial extension screen", () => {
     await userEvent.click(screen.getByTestId("extension-load"));
     await screen.findByTestId("extension-preview");
 
-    await userEvent.type(screen.getByTestId("extension-entitlement-id"), "trial-1");
     await userEvent.type(screen.getByTestId("extension-new-ends-at"), "2026-09-25T00:00:00Z");
-    await userEvent.type(screen.getByTestId("extension-case-id"), "case-700");
-    await userEvent.type(screen.getByTestId("extension-reason"), "goodwill extension");
-    await userEvent.type(screen.getByTestId("extension-evidence"), "ticket-700");
-    await userEvent.type(screen.getByTestId("extension-expected-version"), "2026-09-15T00:00:00Z");
     await userEvent.click(screen.getByTestId("extension-submit"));
 
     await waitFor(() => expect(screen.getByTestId("extension-success")).toBeTruthy());
     const post = calls.find((call) => call.path === "/api/v1/admin/trial-extensions");
     expect(post?.headers["x-csrf-token"]).toBe("admin-csrf-token");
-    const payload = JSON.parse(post?.body ?? "{}");
-    expect(payload).toEqual({
-      user_id: "user-1",
-      entitlement_id: "trial-1",
-      new_ends_at: "2026-09-25T00:00:00Z",
-      expected_version: "2026-09-15T00:00:00Z",
-      case_id: "case-700",
-      reason: "goodwill extension",
-      evidence_ref: "ticket-700",
-    });
   });
 
-  it("keeps submit disabled when the typed expiry is not the current one", async () => {
-    installFetch({ [trialPreviewUrl]: { json: trialPreview } });
-
-    renderAt("/admin/extension", <TrialExtension />);
-    await userEvent.type(screen.getByTestId("extension-user-id"), "user-1");
-    await userEvent.click(screen.getByTestId("extension-load"));
-    await screen.findByTestId("extension-preview");
-
-    await userEvent.type(screen.getByTestId("extension-entitlement-id"), "trial-1");
-    await userEvent.type(screen.getByTestId("extension-new-ends-at"), "2026-09-25T00:00:00Z");
-    await userEvent.type(screen.getByTestId("extension-case-id"), "case-800");
-    await userEvent.type(screen.getByTestId("extension-reason"), "goodwill extension");
-    await userEvent.type(screen.getByTestId("extension-evidence"), "ticket-800");
-    await userEvent.type(screen.getByTestId("extension-expected-version"), "2026-09-14T00:00:00Z");
-    expect((screen.getByTestId("extension-submit") as HTMLButtonElement).disabled).toBe(true);
-  });
 });

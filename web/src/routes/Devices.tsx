@@ -118,8 +118,7 @@ export default function Devices() {
         Devices
       </h2>
       <p className="text-text-secondary mb-6">
-        PCs connected to your account. Revoking a device does not free its
-        license slot.
+        PCs connected to your account. Revoking access is not a temporary disconnect.
       </p>
       {actionError ? (
         <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
@@ -233,6 +232,13 @@ export default function Devices() {
                   {device.updated_at.slice(0, 10)}
                 </dd>
               </dl>
+              {device.status === "revoked" ? (
+                <p className="mt-4 rounded-md border border-warning bg-warning-bg px-4 py-3 text-sm text-navy">
+                  This device cannot reconnect or pair again while revoked. Contact
+                  an admin for help. Your trial keeps its original expiry; revoking
+                  does not restart it or free a license slot.
+                </p>
+              ) : null}
               {renaming !== null && renaming.id === device.id ? (
                 <form
                   onSubmit={(event) => {
@@ -345,9 +351,14 @@ export default function Devices() {
                 Revoking <strong>{revoking.name}</strong> disconnects Buildly
                 immediately and permanently disables this device's credential.
               </p>
+              <p>
+                This device will be rejected if it tries to reconnect or pair again.
+                Contact an admin to resolve access after revoking. To go offline
+                temporarily, close the Bridge instead.
+              </p>
               <p data-testid="revoke-slot-warning">
-                This does not free a license slot: the slot this device occupies
-                stays used.
+                Your trial keeps running with the same expiry; it is not reset or
+                paused. Any license slot occupied by this device stays used.
               </p>
             </>
           }

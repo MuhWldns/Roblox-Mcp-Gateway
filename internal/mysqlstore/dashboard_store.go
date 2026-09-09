@@ -385,6 +385,52 @@ func (s *DashboardStore) RevokeDevice(ctx context.Context, correlation string, n
 	return nil
 }
 
+// RestoreDevice un-revokes a revoked device back to active so it can be re-enrolled/paired,
+// while keeping old credentials revoked for safety.
+func (s *DashboardStore) RestoreDevice(ctx context.Context, correlation string, now time.Time, userID, deviceID string) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status FROM devices WHERE id = ? AND user_id = ? FOR UPDATE`, deviceID, userID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return dashboard.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("mysqlstore: find device for restore: %w", err)
+	}
+	if status == "active" {
+		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE devices SET status = 'active' WHERE id = ? AND user_id = ?`, deviceID, userID); err != nil {
+		return fmt.Errorf("mysqlstore: restore device: %w", err)
+	}
+	if err := s.audit(ctx, tx, audit.Event{
+		Actor:         audit.Actor{UserID: userID, Kind: audit.ActorUser},
+		Action:        "device.restore",
+		CorrelationID: correlation,
+		UserID:        userID,
+		TargetType:    "device",
+		TargetID:      deviceID,
+		Before:        map[string]string{"status": status},
+		After:         map[string]string{"status": "active"},
+	}); err != nil {
+		return fmt.Errorf("mysqlstore: audit device restore: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("mysqlstore: commit device restore: %w", err)
+	}
+	return nil
+}
+
 // RotateDeviceCredential replaces the active credential for an owned, active
 // device with a new opaque token, audits the change, and returns the new
 // plaintext credential. The caller must deliver the new credential to the

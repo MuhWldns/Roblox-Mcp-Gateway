@@ -81,39 +81,39 @@ func (a *dashboardAPI) devices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type deviceView struct {
-		ID             string  `json:"id"`
-		Name           string  `json:"name"`
-		Hostname       *string `json:"hostname"`
-		Platform       *string `json:"platform"`
-		BridgeVersion  *string `json:"bridge_version"`
-		Status         string  `json:"status"`
-		Online         bool    `json:"online"`
-		LastHeartbeat  *string `json:"last_heartbeat"`
-		MCPState       *string `json:"mcp_state"`
-		ReconnectCount int     `json:"reconnect_count"`
-		LastError      *string `json:"last_error"`
-		CreatedAt      string  `json:"created_at"`
-		UpdatedAt      string  `json:"updated_at"`
+		ID               string  `json:"id"`
+		Name             string  `json:"name"`
+		Hostname         *string `json:"hostname"`
+		Platform         *string `json:"platform"`
+		BridgeVersion    *string `json:"bridge_version"`
+		Status           string  `json:"status"`
+		Online           bool    `json:"online"`
+		LastHeartbeatAt  *string `json:"last_heartbeat_at"`
+		OfficialMCPState *string `json:"official_mcp_state"`
+		ReconnectCount   int     `json:"reconnect_count"`
+		LastError        *string `json:"last_error"`
+		CreatedAt        string  `json:"created_at"`
+		UpdatedAt        string  `json:"updated_at"`
 	}
 	list := make([]deviceView, 0, len(rows))
 	for _, row := range rows {
 		v := deviceView{
-			ID:             row.ID,
-			Name:           row.Name,
-			Hostname:       row.Hostname,
-			Platform:       row.Platform,
-			BridgeVersion:  row.BridgeVersion,
-			Status:         row.Status,
-			Online:         a.online(row.ID),
-			MCPState:       row.MCPState,
-			ReconnectCount: row.ReconnectCount,
-			LastError:      row.LastError,
-			CreatedAt:      row.CreatedAt.UTC().Format(timeFormat),
-			UpdatedAt:      row.UpdatedAt.UTC().Format(timeFormat),
+			ID:               row.ID,
+			Name:             row.Name,
+			Hostname:         row.Hostname,
+			Platform:         row.Platform,
+			BridgeVersion:    row.BridgeVersion,
+			Status:           row.Status,
+			Online:           a.online(row.ID),
+			OfficialMCPState: row.MCPState,
+			ReconnectCount:   row.ReconnectCount,
+			LastError:        row.LastError,
+			CreatedAt:        row.CreatedAt.UTC().Format(timeFormat),
+			UpdatedAt:        row.UpdatedAt.UTC().Format(timeFormat),
 		}
 		if row.LastHeartbeat != nil {
 			ts := row.LastHeartbeat.UTC().Format(timeFormat)
-			v.LastHeartbeat = &ts
+			v.LastHeartbeatAt = &ts
 		}
 		list = append(list, v)
 	}
@@ -208,6 +208,7 @@ func (a *dashboardAPI) connectors(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": list})
 }
+
 // license mirrors the /api/v1/me trial conventions, adds the paid-license
 // slot state, and includes owner identity, subscription, transfer, recovery,
 // and usage counters.
@@ -281,12 +282,12 @@ func (a *dashboardAPI) diagnostics(w http.ResponseWriter, r *http.Request) {
 			online++
 		}
 		dev := map[string]any{
-			"id":              row.ID,
-			"name":            row.Name,
-			"status":          row.Status,
-			"online":          isOnline,
-			"mcp_state":       row.MCPState,
-			"reconnect_count": row.ReconnectCount,
+			"id":                 row.ID,
+			"name":               row.Name,
+			"status":             row.Status,
+			"online":             isOnline,
+			"official_mcp_state": row.MCPState,
+			"reconnect_count":    row.ReconnectCount,
 		}
 		if row.Hostname != nil {
 			dev["hostname"] = *row.Hostname
@@ -295,7 +296,7 @@ func (a *dashboardAPI) diagnostics(w http.ResponseWriter, r *http.Request) {
 			dev["bridge_version"] = *row.BridgeVersion
 		}
 		if row.LastHeartbeat != nil {
-			dev["last_heartbeat"] = row.LastHeartbeat.UTC().Format(timeFormat)
+			dev["last_heartbeat_at"] = row.LastHeartbeat.UTC().Format(timeFormat)
 		}
 		if row.LastError != nil {
 			dev["last_error"] = *row.LastError

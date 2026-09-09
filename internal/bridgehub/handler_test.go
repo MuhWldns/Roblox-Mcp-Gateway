@@ -752,3 +752,93 @@ func TestBridgeHubGoroutineCountStableAcrossReconnects(t *testing.T) {
 		return runtime.NumGoroutine() <= baseline+5
 	})
 }
+
+func TestBridgeHubTelemetryPersistence(t *testing.T) {
+	fx := newBridgeFixture(t, nil)
+	ws := fx.dialAuthenticated(t)
+	_ = newBridgeClientReader(ws)
+	defer ws.CloseNow()
+
+	// Send hello with bridge_version, platform, and hostname.
+	helloData, err := bridgeproto.Encode(bridgeproto.Envelope{
+		Version:  bridgeproto.Version,
+		Type:     bridgeproto.TypeHello,
+		DeviceID: fx.deviceID,
+		Payload:  json.RawMessage(`{"bridge_version":"2026.09.1","platform":"windows","hostname":"MY-WORKSTATION"}`),
+	}, fx.limits)
+	if err != nil {
+		t.Fatalf("encode hello: %v", err)
+	}
+	if err := ws.Write(t.Context(), websocket.MessageBinary, helloData); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	// Send status with mcp_ready = true.
+	statusData, err := bridgeproto.Encode(bridgeproto.Envelope{
+		Version:  bridgeproto.Version,
+		Type:     bridgeproto.TypeStatus,
+		DeviceID: fx.deviceID,
+		Payload:  json.RawMessage(`{"state":"connected","mcp_ready":true,"studio_count":1}`),
+	}, fx.limits)
+	if err != nil {
+		t.Fatalf("encode status: %v", err)
+	}
+	if err := ws.Write(t.Context(), websocket.MessageBinary, statusData); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+
+	// Send heartbeat.
+	heartbeatData, err := bridgeproto.Encode(bridgeproto.Envelope{
+		Version:  bridgeproto.Version,
+		Type:     bridgeproto.TypeHeartbeat,
+		DeviceID: fx.deviceID,
+	}, fx.limits)
+	if err != nil {
+		t.Fatalf("encode heartbeat: %v", err)
+	}
+	if err := ws.Write(t.Context(), websocket.MessageBinary, heartbeatData); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+
+	// Verify persisted fields in MySQL.
+	eventually(t, 5*time.Second, "telemetry fields to persist", func() bool {
+		var (
+			bridgeVersion   sql.NullString
+			platform        sql.NullString
+			hostname        sql.NullString
+			mcpState        sql.NullString
+			lastHeartbeatAt sql.NullTime
+			reconnectCount  int
+		)
+		err := fx.db.QueryRowContext(t.Context(),
+			`SELECT bridge_version, platform, hostname, official_mcp_state, last_heartbeat_at, reconnect_count
+			 FROM devices WHERE id = ?`, fx.deviceID,
+		).Scan(&bridgeVersion, &platform, &hostname, &mcpState, &lastHeartbeatAt, &reconnectCount)
+		if err != nil {
+			return false
+		}
+		return bridgeVersion.String == "2026.09.1" &&
+			platform.String == "windows" &&
+			hostname.String == "MY-WORKSTATION" &&
+			mcpState.String == "ready" &&
+			lastHeartbeatAt.Valid &&
+			reconnectCount == 0
+	})
+
+	// Disconnect and reconnect: verify reconnect_count increments.
+	ws.CloseNow()
+	fx.awaitRegistryEmpty(t, 2*time.Second)
+
+	ws2 := fx.dialAuthenticated(t)
+	_ = newBridgeClientReader(ws2)
+	defer ws2.CloseNow()
+	fx.sendHelloEnvelope(t, ws2, fx.deviceID)
+
+	eventually(t, 5*time.Second, "reconnect count to increment", func() bool {
+		var reconnectCount int
+		err := fx.db.QueryRowContext(t.Context(),
+			`SELECT reconnect_count FROM devices WHERE id = ?`, fx.deviceID,
+		).Scan(&reconnectCount)
+		return err == nil && reconnectCount == 1
+	})
+}

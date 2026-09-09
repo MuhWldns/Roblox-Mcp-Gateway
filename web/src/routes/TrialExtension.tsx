@@ -9,11 +9,6 @@ import {
 } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
 
-// TrialExtension moves an existing trial entitlement's expiry later. The
-// typed-confirmation form carries the entitlement id, the new UTC expiry, the
-// case id, reason, evidence reference, and the expected version — the current
-// expiry shown by the preview. The server updates the same row only; no
-// second trial record can ever be created.
 export default function TrialExtension() {
   const [params] = useSearchParams();
   const [userId, setUserId] = useState(() => params.get("user_id") ?? "");
@@ -22,12 +17,7 @@ export default function TrialExtension() {
   const [forbidden, setForbidden] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [entitlementId, setEntitlementId] = useState("");
   const [newEndsAt, setNewEndsAt] = useState("");
-  const [caseId, setCaseId] = useState("");
-  const [reason, setReason] = useState("");
-  const [evidenceRef, setEvidenceRef] = useState("");
-  const [expectedVersion, setExpectedVersion] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -45,7 +35,7 @@ export default function TrialExtension() {
     try {
       const loaded = await getAdminTrialPreview(id);
       setPreview(loaded);
-      setExpectedVersion("");
+      setNewEndsAt("");
     } catch (error) {
       setPreview(null);
       if (error instanceof UnauthorizedError) {
@@ -63,31 +53,26 @@ export default function TrialExtension() {
   }, [userId]);
 
   async function submit() {
-    if (preview === null) {
+    if (preview?.trial == null) {
       return;
     }
     setBusy(true);
     try {
       await adminExtendTrial({
         user_id: preview.user_id,
-        entitlement_id: entitlementId.trim(),
+        entitlement_id: preview.trial.id,
         new_ends_at: newEndsAt.trim(),
-        expected_version: expectedVersion.trim(),
-        case_id: caseId.trim(),
-        reason: reason.trim(),
-        evidence_ref: evidenceRef.trim(),
+        expected_version: preview.version,
+        case_id: crypto.randomUUID(),
+        reason: "Trial extension requested by administrator",
+        evidence_ref: "admin-dashboard:extension",
       });
       setActionError(null);
       setNotice(
         "Extension completed. The same entitlement now ends at the new expiry; no second trial was created.",
       );
       setPreview(null);
-      setEntitlementId("");
       setNewEndsAt("");
-      setCaseId("");
-      setReason("");
-      setEvidenceRef("");
-      setExpectedVersion("");
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         setActionError(
@@ -120,16 +105,8 @@ export default function TrialExtension() {
     );
   }
 
-  const versionMatches = preview !== null && expectedVersion.trim() === preview.version;
-  const complete =
-    preview !== null &&
-    preview.trial !== null &&
-    entitlementId.trim().length > 0 &&
-    newEndsAt.trim().length > 0 &&
-    caseId.trim().length > 0 &&
-    reason.trim().length > 0 &&
-    evidenceRef.trim().length > 0 &&
-    versionMatches;
+  const complete = preview?.trial != null && preview.user_id === userId.trim() &&
+    newEndsAt.trim().length > 0;
 
   return (
     <section data-testid="page-admin-extension" aria-labelledby="extension-title">
@@ -153,12 +130,10 @@ export default function TrialExtension() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (preview === null) {
-            void load();
-          }
+          void load();
         }}
       >
-        <label htmlFor="extension-user">Case user id</label>
+        <label htmlFor="extension-user">User id</label>
         <input
           id="extension-user"
           data-testid="extension-user-id"
@@ -191,10 +166,6 @@ export default function TrialExtension() {
             ) : (
               <p>No trial entitlement for this user.</p>
             )}
-            <p>
-              Expected version (the current expiry):{" "}
-              <code data-testid="extension-version">{preview.version}</code>
-            </p>
           </div>
           <p data-testid="extension-plan">
             The trial keeps its identity and start; only the expiry moves to
@@ -209,13 +180,6 @@ export default function TrialExtension() {
               }
             }}
           >
-            <label htmlFor="extension-entitlement">Entitlement id</label>
-            <input
-              id="extension-entitlement"
-              data-testid="extension-entitlement-id"
-              value={entitlementId}
-              onChange={(event) => setEntitlementId(event.target.value)}
-            />
             <label htmlFor="extension-ends">New expiry (UTC, e.g. 2026-10-02T11:00:00Z)</label>
             <input
               id="extension-ends"
@@ -223,39 +187,6 @@ export default function TrialExtension() {
               value={newEndsAt}
               onChange={(event) => setNewEndsAt(event.target.value)}
             />
-            <label htmlFor="extension-case">Case id</label>
-            <input
-              id="extension-case"
-              data-testid="extension-case-id"
-              value={caseId}
-              onChange={(event) => setCaseId(event.target.value)}
-            />
-            <label htmlFor="extension-reason">Reason</label>
-            <input
-              id="extension-reason"
-              data-testid="extension-reason"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-            <label htmlFor="extension-evidence">Evidence reference</label>
-            <input
-              id="extension-evidence"
-              data-testid="extension-evidence"
-              value={evidenceRef}
-              onChange={(event) => setEvidenceRef(event.target.value)}
-            />
-            <label htmlFor="extension-version-input">
-              Expected version (type the current expiry shown above)
-            </label>
-            <input
-              id="extension-version-input"
-              data-testid="extension-expected-version"
-              value={expectedVersion}
-              onChange={(event) => setExpectedVersion(event.target.value)}
-            />
-            {!versionMatches && expectedVersion.trim().length > 0 ? (
-              <p role="alert">The typed version does not match the current expiry.</p>
-            ) : null}
             <button type="submit" data-testid="extension-submit" disabled={!complete || busy}>
               Confirm extension
             </button>

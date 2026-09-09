@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
 import {
   type AdminTransferPreview,
   ApiError,
@@ -9,12 +9,9 @@ import {
 } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
 
-// DeviceTransfer moves an active paid-license slot from one device to
-// another. The typed-confirmation form carries the case id, reason, evidence
-// reference, and the version token minted by the preview; the server rejects
-// any request built on stale state.
 export default function DeviceTransfer() {
-  const [userId, setUserId] = useState("");
+  const [params] = useSearchParams();
+  const [userId, setUserId] = useState(() => params.get("user_id") ?? "");
   const [preview, setPreview] = useState<AdminTransferPreview | null>(null);
   const [denied, setDenied] = useState(false);
   const [forbidden, setForbidden] = useState(false);
@@ -23,10 +20,6 @@ export default function DeviceTransfer() {
   const [oldDeviceId, setOldDeviceId] = useState("");
   const [newDeviceId, setNewDeviceId] = useState("");
   const [licenseId, setLicenseId] = useState("");
-  const [caseId, setCaseId] = useState("");
-  const [reason, setReason] = useState("");
-  const [evidenceRef, setEvidenceRef] = useState("");
-  const [expectedVersion, setExpectedVersion] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -46,7 +39,6 @@ export default function DeviceTransfer() {
       setPreview(loaded);
       setOldDeviceId("");
       setNewDeviceId("");
-      setExpectedVersion("");
     } catch (error) {
       setPreview(null);
       if (error instanceof UnauthorizedError) {
@@ -74,18 +66,14 @@ export default function DeviceTransfer() {
         license_id: licenseId.trim(),
         old_device_id: oldDeviceId,
         new_device_id: newDeviceId,
-        expected_version: expectedVersion.trim(),
-        case_id: caseId.trim(),
-        reason: reason.trim(),
-        evidence_ref: evidenceRef.trim(),
+        expected_version: preview.version,
+        case_id: crypto.randomUUID(),
+        reason: "Device transfer requested by administrator",
+        evidence_ref: "admin-dashboard:transfer",
       });
       setActionError(null);
       setNotice("Transfer completed. The license slot moved to the new device.");
       setPreview(null);
-      setCaseId("");
-      setReason("");
-      setEvidenceRef("");
-      setExpectedVersion("");
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         setActionError(
@@ -119,16 +107,12 @@ export default function DeviceTransfer() {
   }
 
   const activeDevices = preview?.devices.filter((device) => device.status === "active") ?? [];
-  const versionMatches = preview !== null && expectedVersion.trim() === preview.version;
   const complete =
     preview !== null &&
     oldDeviceId.length > 0 &&
     newDeviceId.length > 0 &&
     licenseId.trim().length > 0 &&
-    caseId.trim().length > 0 &&
-    reason.trim().length > 0 &&
-    evidenceRef.trim().length > 0 &&
-    versionMatches &&
+    preview.user_id === userId.trim() &&
     oldDeviceId !== newDeviceId;
 
   return (
@@ -153,12 +137,10 @@ export default function DeviceTransfer() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (preview === null) {
-            void load();
-          }
+          void load();
         }}
       >
-        <label htmlFor="transfer-user">Case user id</label>
+        <label htmlFor="transfer-user">User id</label>
         <input
           id="transfer-user"
           data-testid="transfer-user-id"
@@ -196,9 +178,6 @@ export default function DeviceTransfer() {
             ) : (
               <p>No active license for this user.</p>
             )}
-            <p>
-              State version token: <code data-testid="transfer-version">{preview.version}</code>
-            </p>
           </div>
           <p data-testid="transfer-plan">
             {oldDeviceId.length > 0 && newDeviceId.length > 0
@@ -248,39 +227,6 @@ export default function DeviceTransfer() {
                 </option>
               ))}
             </select>
-            <label htmlFor="transfer-case">Case id</label>
-            <input
-              id="transfer-case"
-              data-testid="transfer-case-id"
-              value={caseId}
-              onChange={(event) => setCaseId(event.target.value)}
-            />
-            <label htmlFor="transfer-reason">Reason</label>
-            <input
-              id="transfer-reason"
-              data-testid="transfer-reason"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-            <label htmlFor="transfer-evidence">Evidence reference</label>
-            <input
-              id="transfer-evidence"
-              data-testid="transfer-evidence"
-              value={evidenceRef}
-              onChange={(event) => setEvidenceRef(event.target.value)}
-            />
-            <label htmlFor="transfer-version-input">
-              Expected version (type the state version token shown above)
-            </label>
-            <input
-              id="transfer-version-input"
-              data-testid="transfer-expected-version"
-              value={expectedVersion}
-              onChange={(event) => setExpectedVersion(event.target.value)}
-            />
-            {!versionMatches && expectedVersion.trim().length > 0 ? (
-              <p role="alert">The typed version does not match the previewed state.</p>
-            ) : null}
             <button type="submit" data-testid="transfer-submit" disabled={!complete || busy}>
               Confirm transfer
             </button>

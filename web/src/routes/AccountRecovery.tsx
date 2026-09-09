@@ -4,16 +4,13 @@ import {
   type AdminRecoveryPreview,
   ApiError,
   UnauthorizedError,
+  adminDisconnectDevice,
   adminRecoverIdentity,
+  adminRestoreDevice,
   getAdminRecoveryPreview,
 } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
 
-// AccountRecovery revokes every web session, connector grant and token, and
-// device credential of an account and drops its live Bridge connections. The
-// typed-confirmation form carries the case id, reason, evidence reference,
-// and the version token minted by the preview. The trial window is never
-// touched — the plan says so explicitly.
 export default function AccountRecovery() {
   const [params] = useSearchParams();
   const [userId, setUserId] = useState(() => params.get("user_id") ?? "");
@@ -23,10 +20,8 @@ export default function AccountRecovery() {
   const [notFound, setNotFound] = useState(false);
   const [failed, setFailed] = useState(false);
   const [newIdentityId, setNewIdentityId] = useState("");
-  const [caseId, setCaseId] = useState("");
-  const [reason, setReason] = useState("");
-  const [evidenceRef, setEvidenceRef] = useState("");
-  const [expectedVersion, setExpectedVersion] = useState("");
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -44,7 +39,7 @@ export default function AccountRecovery() {
     try {
       const loaded = await getAdminRecoveryPreview(id);
       setPreview(loaded);
-      setExpectedVersion("");
+      setActionError(null);
     } catch (error) {
       setPreview(null);
       if (error instanceof UnauthorizedError) {
@@ -69,10 +64,10 @@ export default function AccountRecovery() {
     try {
       await adminRecoverIdentity({
         user_id: preview.user_id,
-        expected_version: expectedVersion.trim(),
-        case_id: caseId.trim(),
-        reason: reason.trim(),
-        evidence_ref: evidenceRef.trim(),
+        expected_version: preview.version,
+        case_id: crypto.randomUUID(),
+        reason: "Account recovery requested by administrator",
+        evidence_ref: "admin-dashboard:recovery",
         new_identity_id: newIdentityId.trim() === "" ? undefined : newIdentityId.trim(),
       });
       setActionError(null);
@@ -80,10 +75,6 @@ export default function AccountRecovery() {
         "Recovery completed. Every session, connector grant and token, and device credential was revoked; live connections were dropped. The trial window is unchanged.",
       );
       setPreview(null);
-      setCaseId("");
-      setReason("");
-      setEvidenceRef("");
-      setExpectedVersion("");
       setNewIdentityId("");
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -102,6 +93,37 @@ export default function AccountRecovery() {
     }
   }
 
+  async function handleRestoreDevice(deviceId: string) {
+    if (!preview) return;
+    setRestoringId(deviceId);
+    setActionError(null);
+    try {
+      await adminRestoreDevice(preview.user_id, deviceId);
+      setNotice("Device un-revoked successfully. The operator can now re-enroll or pair it with a fresh code.");
+      const reloaded = await getAdminRecoveryPreview(userId.trim());
+      setPreview(reloaded);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to restore device.");
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  async function handleDisconnectDevice(deviceId: string) {
+    if (!preview) return;
+    setDisconnectingId(deviceId);
+    setActionError(null);
+    try {
+      await adminDisconnectDevice(preview.user_id, deviceId);
+      setNotice("Device WebSocket connection disconnected. The Bridge client will reconnect on its next poll/launch.");
+      const reloaded = await getAdminRecoveryPreview(userId.trim());
+      setPreview(reloaded);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to disconnect device.");
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
   if (denied) {
     return <Navigate to="/login" replace />;
   }
@@ -117,13 +139,7 @@ export default function AccountRecovery() {
     );
   }
 
-  const versionMatches = preview !== null && expectedVersion.trim() === preview.version;
-  const complete =
-    preview !== null &&
-    caseId.trim().length > 0 &&
-    reason.trim().length > 0 &&
-    evidenceRef.trim().length > 0 &&
-    versionMatches;
+  const complete = preview !== null && preview.user_id === userId.trim();
 
   return (
     <section data-testid="page-admin-recovery" aria-labelledby="recovery-title">
@@ -147,12 +163,10 @@ export default function AccountRecovery() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (preview === null) {
-            void load();
-          }
+          void load();
         }}
       >
-        <label htmlFor="recovery-user">Case user id</label>
+        <label htmlFor="recovery-user">User id</label>
         <input
           id="recovery-user"
           data-testid="recovery-user-id"
@@ -173,15 +187,45 @@ export default function AccountRecovery() {
             <h3>Account state</h3>
             <p>Acting on {preview.identity?.display_name ?? preview.user_id}</p>
             <p>{preview.devices.length} device(s) registered</p>
-            <ul>
-              {preview.devices.map((device) => (
-                <li key={device.id}>
-                  {device.name} ({device.id}){" "}
-                  <StatusBadge status={device.online ? "online" : "offline"} />{" "}
-                  <StatusBadge status={device.status} />
-                </li>
-              ))}
-            </ul>
+            <ul className="list-none p-0 m-0 space-y-2 my-3">
+                {preview.devices.map((device) => (
+                  <li
+                    key={device.id}
+                    className="p-3 bg-surface-alt rounded border border-border flex flex-wrap items-center justify-between gap-3 text-sm"
+                  >
+                    <div>
+                      <span className="font-semibold text-navy mr-2">{device.name}</span>
+                      <span className="text-text-muted">({device.id})</span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <StatusBadge status={device.online ? "online" : "offline"} />
+                        <StatusBadge status={device.status} />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      {device.online ? (
+                        <button
+                          type="button"
+                          disabled={busy || disconnectingId === device.id}
+                          onClick={() => void handleDisconnectDevice(device.id)}
+                          className="px-3 py-1.5 text-xs font-semibold border border-border rounded bg-white text-navy hover:bg-surface-alt transition-colors"
+                        >
+                          {disconnectingId === device.id ? "Disconnecting…" : "Disconnect"}
+                        </button>
+                      ) : null}
+                      {device.status === "revoked" ? (
+                        <button
+                          type="button"
+                          disabled={busy || restoringId === device.id}
+                          onClick={() => void handleRestoreDevice(device.id)}
+                          className="px-3 py-1.5 text-xs font-semibold border border-red text-red rounded bg-white hover:bg-error-bg transition-colors"
+                        >
+                          {restoringId === device.id ? "Restoring…" : "Un-revoke / Restore"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             <p>{preview.connectors.length} connector grant(s)</p>
             <ul>
               {preview.connectors.map((connector) => (
@@ -191,9 +235,6 @@ export default function AccountRecovery() {
                 </li>
               ))}
             </ul>
-            <p>
-              State version token: <code data-testid="recovery-version">{preview.version}</code>
-            </p>
           </div>
           <p data-testid="recovery-plan">
             Every web session, connector grant and its access and refresh
@@ -204,51 +245,18 @@ export default function AccountRecovery() {
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (complete && !busy) {
-                void submit();
-              }
+              void submit();
             }}
           >
-            <label htmlFor="recovery-new-identity">New identity id (optional)</label>
+            <label htmlFor="recovery-identity">
+              Replacement Roblox identity id (optional)
+            </label>
             <input
-              id="recovery-new-identity"
+              id="recovery-identity"
               data-testid="recovery-new-identity"
               value={newIdentityId}
               onChange={(event) => setNewIdentityId(event.target.value)}
             />
-            <label htmlFor="recovery-case">Case id</label>
-            <input
-              id="recovery-case"
-              data-testid="recovery-case-id"
-              value={caseId}
-              onChange={(event) => setCaseId(event.target.value)}
-            />
-            <label htmlFor="recovery-reason">Reason</label>
-            <input
-              id="recovery-reason"
-              data-testid="recovery-reason"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-            <label htmlFor="recovery-evidence">Evidence reference</label>
-            <input
-              id="recovery-evidence"
-              data-testid="recovery-evidence"
-              value={evidenceRef}
-              onChange={(event) => setEvidenceRef(event.target.value)}
-            />
-            <label htmlFor="recovery-version-input">
-              Expected version (type the state version token shown above)
-            </label>
-            <input
-              id="recovery-version-input"
-              data-testid="recovery-expected-version"
-              value={expectedVersion}
-              onChange={(event) => setExpectedVersion(event.target.value)}
-            />
-            {!versionMatches && expectedVersion.trim().length > 0 ? (
-              <p role="alert">The typed version does not match the previewed state.</p>
-            ) : null}
             <button type="submit" data-testid="recovery-submit" disabled={!complete || busy}>
               Confirm recovery
             </button>

@@ -110,6 +110,9 @@ type Store interface {
 	// license slot occupied, and audits the transition. Revoking twice
 	// succeeds without a second audit event.
 	RevokeDevice(ctx context.Context, correlation string, now time.Time, userID, deviceID string) error
+	// RestoreDevice un-revokes a revoked device so it can be paired/enrolled again,
+	// leaving old credentials dead for security, and audits the transition.
+	RestoreDevice(ctx context.Context, correlation string, now time.Time, userID, deviceID string) error
 	// SetConnectorTarget repoints an owned, unrevoked connector grant at an
 	// owned device and an optional owned Studio session, and audits the
 	// change.

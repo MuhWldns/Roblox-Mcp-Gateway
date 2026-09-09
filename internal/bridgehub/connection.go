@@ -54,6 +54,7 @@ type connectionOptions struct {
 	writeTimeout      time.Duration
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
+	onPong            func()
 }
 
 // Connection wraps one upgraded Bridge WebSocket with a bounded writer queue
@@ -67,11 +68,11 @@ type Connection struct {
 	writeTimeout      time.Duration
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
-
-	ctx        context.Context
-	cancel     context.CancelFunc
-	readCtx    context.Context
-	readCancel context.CancelFunc
+	onPong            func()
+	ctx               context.Context
+	cancel            context.CancelFunc
+	readCtx           context.Context
+	readCancel        context.CancelFunc
 
 	mu     sync.Mutex
 	closed bool
@@ -104,6 +105,7 @@ func newConnection(parent context.Context, ws *websocket.Conn, device Device, op
 		writeTimeout:      opts.writeTimeout,
 		heartbeatInterval: opts.heartbeatInterval,
 		heartbeatTimeout:  opts.heartbeatTimeout,
+		onPong:            opts.onPong,
 		ctx:               ctx,
 		cancel:            cancel,
 		readCtx:           readCtx,
@@ -245,6 +247,9 @@ func (c *Connection) pingLoop() {
 			if err != nil {
 				c.close(websocket.StatusPolicyViolation, reasonHeartbeatTimeout)
 				return
+			}
+			if c.onPong != nil {
+				c.onPong()
 			}
 		}
 	}

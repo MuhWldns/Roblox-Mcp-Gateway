@@ -357,6 +357,10 @@ func (e *Enrollment) Exchange(ctx context.Context, deviceCode string) (DeviceCre
 		Provider:         robloxProvider,
 		ProviderSubject:  record.ProviderSubject,
 		DeviceID:         claim.DeviceID,
+		Name:             claim.Name,
+		Hostname:         claim.Hostname,
+		Platform:         claim.Platform,
+		BridgeVersion:    claim.BridgeVersion,
 		CredentialDigest: credentialDigest,
 		AuditCorrelation: record.ID,
 	}); err != nil {

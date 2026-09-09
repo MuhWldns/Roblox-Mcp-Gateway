@@ -28,19 +28,24 @@ export default function Admin() {
     <section data-testid="page-admin" aria-labelledby="admin-title" className="animate-[pageEnter_200ms_ease]">
       <h2 id="admin-title" className="text-xl font-semibold text-navy mb-1">Admin</h2>
       <p className="text-text-secondary mb-6 max-w-[70ch]">
-        Privileged support actions. Every action needs a case id, a reason, an
-        evidence reference, and the version of the state you previewed.
+        Select a user, review the action, and confirm. Audit details and state
+        checks are handled automatically—no support-case paperwork required.
       </p>
       <h3 className="text-lg font-semibold text-navy mb-3">Users</h3>
       {error && <p role="alert">{error}</p>}
       {!busy && !error && users.length === 0 && <p>No registered users yet.</p>}
       <ul className="list-none p-0 mb-6 divide-y divide-border border border-border rounded-lg bg-white">
-        {users.map(user => <li key={user.id} className="p-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0"><strong>{user.display_name || "Unnamed account"}</strong>
-            <p className="text-sm text-text-secondary break-all m-0">Roblox ID: {user.subject || "Unavailable"} · {user.id}</p></div>
-          <div className="flex flex-wrap gap-4 text-sm font-semibold">
-            <Link to={`/admin/extension?user_id=${encodeURIComponent(user.id)}`}>Extend trial</Link>
-            <Link className="text-red" to={`/admin/recovery?user_id=${encodeURIComponent(user.id)}`}>Revoke access</Link>
+        {users.map(user => <li key={user.id} className="p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <strong>{user.display_name || "Unnamed account"}</strong>
+              <p className="text-sm text-text-secondary break-all m-0">Roblox ID: {user.subject || "Unavailable"} · {user.id}</p>
+            </div>
+            <div className="flex flex-wrap gap-3 text-sm font-semibold">
+              <Link to={`/admin/extension?user_id=${encodeURIComponent(user.id)}`} className="text-navy hover:text-red">Extend trial</Link>
+              <Link to={`/admin/transfer?user_id=${encodeURIComponent(user.id)}`} className="text-navy hover:text-red">Transfer slot</Link>
+              <Link to={`/admin/recovery?user_id=${encodeURIComponent(user.id)}`} className="text-red hover:underline">Revoke access</Link>
+            </div>
           </div>
         </li>)}
       </ul>

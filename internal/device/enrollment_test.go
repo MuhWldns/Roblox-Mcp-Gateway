@@ -380,6 +380,42 @@ func TestFailedExchangePreservesExistingTrialWindow(t *testing.T) {
 		t.Fatalf("trial rows = %d, want 1", got)
 	}
 }
+func TestExchangePersistsDeviceClaimMetadata(t *testing.T) {
+	stack := newEnrollmentStack(t)
+	user := stack.user(t, "1516563360")
+
+	claim := device.DeviceClaim{
+		DeviceID:      "device-meta-1",
+		Name:          "Custom Device Name",
+		Hostname:      "WORKSTATION-X",
+		Platform:      "windows",
+		BridgeVersion: "1.5.0",
+	}
+	code := stack.beginAndApprove(t, user, claim)
+	if _, err := stack.enrollment.Exchange(t.Context(), code); err != nil {
+		t.Fatalf("exchange: %v", err)
+	}
+
+	var name, hostname, platform, bridgeVersion sql.NullString
+	err := stack.db.QueryRowContext(t.Context(),
+		"SELECT name, hostname, platform, bridge_version FROM devices WHERE id = ?", "device-meta-1",
+	).Scan(&name, &hostname, &platform, &bridgeVersion)
+	if err != nil {
+		t.Fatalf("query device metadata: %v", err)
+	}
+	if name.String != "Custom Device Name" {
+		t.Errorf("name = %q, want 'Custom Device Name'", name.String)
+	}
+	if hostname.String != "WORKSTATION-X" {
+		t.Errorf("hostname = %q, want 'WORKSTATION-X'", hostname.String)
+	}
+	if platform.String != "windows" {
+		t.Errorf("platform = %q, want 'windows'", platform.String)
+	}
+	if bridgeVersion.String != "1.5.0" {
+		t.Errorf("bridge_version = %q, want '1.5.0'", bridgeVersion.String)
+	}
+}
 
 func TestEnrollmentConstructorRejectsInvalidInputs(t *testing.T) {
 	db := enrollmentTestDatabase(t)

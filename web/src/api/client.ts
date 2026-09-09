@@ -153,7 +153,7 @@ export interface LicenseSnapshot {
 
 export class UnauthorizedError extends Error {
   constructor() {
-    super("authentication required");
+    super("Please log in first to continue.");
     this.name = "UnauthorizedError";
   }
 }
@@ -345,13 +345,24 @@ export async function getDiagnostics(): Promise<DiagnosticsResponse> {
 
 // --- Administration surface -------------------------------------------------
 
-// ApiError carries the HTTP status of a failed call. The message matches the
-// historical generic format so nothing that renders error.message changes.
+// ApiError carries the HTTP status of a failed call with friendly, human-readable defaults.
 export class ApiError extends Error {
   readonly status: number;
 
   constructor(status: number) {
-    super(`request failed with HTTP ${status}`);
+    let msg = `Request could not be completed (${status}). Please try again.`;
+    if (status === 401) {
+      msg = "Please log in first to continue.";
+    } else if (status === 403) {
+      msg = "You do not have permission to perform this action.";
+    } else if (status === 404) {
+      msg = "The requested resource was not found.";
+    } else if (status === 429) {
+      msg = "Too many requests. Please slow down and try again shortly.";
+    } else if (status >= 500) {
+      msg = "Server is temporarily unavailable. Please try again in a moment.";
+    }
+    super(msg);
     this.name = "ApiError";
     this.status = status;
   }
@@ -457,6 +468,19 @@ export function getAdminUsers(after = "") {
 export async function getAdminTransferPreview(userId: string): Promise<AdminTransferPreview> {
   return request<AdminTransferPreview>(
     `/api/v1/admin/users/${encodeURIComponent(userId)}/transfer-preview`,
+  );
+}
+export async function adminRestoreDevice(userId: string, deviceId: string): Promise<void> {
+  return mutation(
+    "/api/v1/admin/devices/restore",
+    JSON.stringify({ user_id: userId, device_id: deviceId }),
+  );
+}
+
+export async function adminDisconnectDevice(userId: string, deviceId: string): Promise<void> {
+  return mutation(
+    "/api/v1/admin/devices/disconnect",
+    JSON.stringify({ user_id: userId, device_id: deviceId }),
   );
 }
 

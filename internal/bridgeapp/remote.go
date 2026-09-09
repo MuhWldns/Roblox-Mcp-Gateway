@@ -78,6 +78,7 @@ var (
 
 // remoteHello is the hello payload announcing the Bridge on every connection.
 type remoteHello struct {
+	Hostname      string   `json:"hostname,omitempty"`
 	BridgeVersion string   `json:"bridge_version"`
 	Platform      string   `json:"platform"`
 	Capabilities  []string `json:"capabilities"`
@@ -283,7 +284,9 @@ func (r *remoteRunner) dial(ctx context.Context) (*bridgeSession, error) {
 }
 
 func (r *remoteRunner) helloEnvelope() bridgeproto.Envelope {
+	hostname, _ := os.Hostname()
 	payload, err := json.Marshal(remoteHello{
+		Hostname:      hostname,
 		BridgeVersion: r.deps.BridgeVersion,
 		Platform:      runtime.GOOS,
 		Capabilities:  []string{},

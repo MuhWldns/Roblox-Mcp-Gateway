@@ -1758,3 +1758,100 @@ func TestRouterRevokeAllSessionsRevokesOnlyOwnSessions(t *testing.T) {
 		t.Fatalf("other user me status = %d, want 200", res.StatusCode)
 	}
 }
+
+func TestRouterDeviceAndDiagnosticsContract(t *testing.T) {
+	stack := newRouterStack(t)
+	userA, sessionA := stack.login(t, "1516563360")
+
+	heartbeat := time.Date(2026, 9, 4, 10, 59, 30, 0, time.UTC)
+	stack.exec(t, `INSERT INTO devices (id, user_id, name, hostname, platform, bridge_version, status, last_heartbeat_at, official_mcp_state, reconnect_count, last_error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"device-contract-1", userA.ID, "Workstation", "dev-box", "windows", "bridge-2026.09", "active", heartbeat, "ready", 3, "Connection reset; retry scheduled")
+	stack.registry.setOnline("device-contract-1", true)
+
+	// Test /api/v1/devices response contract
+	res := stack.do(t, http.MethodGet, "/api/v1/devices", []*http.Cookie{sessionA}, nil, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("devices status = %d", res.StatusCode)
+	}
+	var devPayload struct {
+		Devices []map[string]any `json:"devices"`
+	}
+	decodeJSON(t, res, &devPayload)
+	if len(devPayload.Devices) != 1 {
+		t.Fatalf("devices count = %d, want 1", len(devPayload.Devices))
+	}
+	dev := devPayload.Devices[0]
+	if dev["id"] != "device-contract-1" {
+		t.Errorf("dev[id] = %v, want device-contract-1", dev["id"])
+	}
+	if dev["hostname"] != "dev-box" {
+		t.Errorf("dev[hostname] = %v, want dev-box", dev["hostname"])
+	}
+	if dev["platform"] != "windows" {
+		t.Errorf("dev[platform] = %v, want windows", dev["platform"])
+	}
+	if dev["bridge_version"] != "bridge-2026.09" {
+		t.Errorf("dev[bridge_version] = %v, want bridge-2026.09", dev["bridge_version"])
+	}
+	if dev["online"] != true {
+		t.Errorf("dev[online] = %v, want true", dev["online"])
+	}
+	if dev["last_heartbeat_at"] != "2026-09-04T10:59:30Z" {
+		t.Errorf("dev[last_heartbeat_at] = %v, want 2026-09-04T10:59:30Z", dev["last_heartbeat_at"])
+	}
+	if dev["official_mcp_state"] != "ready" {
+		t.Errorf("dev[official_mcp_state] = %v, want ready", dev["official_mcp_state"])
+	}
+	if count, ok := dev["reconnect_count"].(float64); !ok || int(count) != 3 {
+		t.Errorf("dev[reconnect_count] = %v, want 3", dev["reconnect_count"])
+	}
+	if dev["last_error"] != "Connection reset; retry scheduled" {
+		t.Errorf("dev[last_error] = %v, want 'Connection reset; retry scheduled'", dev["last_error"])
+	}
+	// Ensure obsolete field names are absent
+	if _, exists := dev["last_heartbeat"]; exists {
+		t.Errorf("dev contains obsolete field last_heartbeat: %v", dev["last_heartbeat"])
+	}
+	if _, exists := dev["mcp_state"]; exists {
+		t.Errorf("dev contains obsolete field mcp_state: %v", dev["mcp_state"])
+	}
+
+	// Test /api/v1/diagnostics response contract
+	diagRes := stack.do(t, http.MethodGet, "/api/v1/diagnostics", []*http.Cookie{sessionA}, nil, "")
+	if diagRes.StatusCode != http.StatusOK {
+		t.Fatalf("diagnostics status = %d", diagRes.StatusCode)
+	}
+	var diagPayload struct {
+		Database          string           `json:"database"`
+		DevicesRegistered int              `json:"devices_registered"`
+		DevicesOnline     int              `json:"devices_online"`
+		Devices           []map[string]any `json:"devices"`
+	}
+	decodeJSON(t, diagRes, &diagPayload)
+	if len(diagPayload.Devices) != 1 {
+		t.Fatalf("diag devices count = %d, want 1", len(diagPayload.Devices))
+	}
+	diagDev := diagPayload.Devices[0]
+	if diagDev["id"] != "device-contract-1" {
+		t.Errorf("diagDev[id] = %v, want device-contract-1", diagDev["id"])
+	}
+	if diagDev["last_heartbeat_at"] != "2026-09-04T10:59:30Z" {
+		t.Errorf("diagDev[last_heartbeat_at] = %v, want 2026-09-04T10:59:30Z", diagDev["last_heartbeat_at"])
+	}
+	if diagDev["official_mcp_state"] != "ready" {
+		t.Errorf("diagDev[official_mcp_state] = %v, want ready", diagDev["official_mcp_state"])
+	}
+	if count, ok := diagDev["reconnect_count"].(float64); !ok || int(count) != 3 {
+		t.Errorf("diagDev[reconnect_count] = %v, want 3", diagDev["reconnect_count"])
+	}
+	if diagDev["last_error"] != "Connection reset; retry scheduled" {
+		t.Errorf("diagDev[last_error] = %v, want 'Connection reset; retry scheduled'", diagDev["last_error"])
+	}
+	if _, exists := diagDev["last_heartbeat"]; exists {
+		t.Errorf("diagDev contains obsolete field last_heartbeat: %v", diagDev["last_heartbeat"])
+	}
+	if _, exists := diagDev["mcp_state"]; exists {
+		t.Errorf("diagDev contains obsolete field mcp_state: %v", diagDev["mcp_state"])
+	}
+}

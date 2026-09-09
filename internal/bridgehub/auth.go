@@ -5,6 +5,7 @@ package bridgehub
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -68,6 +69,11 @@ type Store interface {
 	HasActiveDeviceBinding(ctx context.Context, userID, deviceID string) (bool, error)
 	UserIdentity(ctx context.Context, userID string) (Identity, error)
 	SyncActiveStudioSession(ctx context.Context, userID, deviceID string) error
+	RecordConnect(ctx context.Context, userID, deviceID string, now time.Time) (string, error)
+	RecordDisconnect(ctx context.Context, connectionID string, now time.Time, reason string) error
+	RecordHello(ctx context.Context, userID, deviceID, bridgeVersion, platform, hostname string) error
+	RecordHeartbeat(ctx context.Context, userID, deviceID string, now time.Time) error
+	RecordStatus(ctx context.Context, userID, deviceID, mcpState string) error
 }
 
 // Authenticator validates a presented device credential against the store,
@@ -308,5 +314,136 @@ func (s *SQLStore) SyncActiveStudioSession(ctx context.Context, userID, deviceID
 		0x8000|(time.Now().UnixNano()&0x3fff),
 		time.Now().UnixNano()&0xffffffffffff)
 	_, err = s.DB.ExecContext(ctx, `INSERT INTO studio_sessions (id, user_id, device_id, studio_id, status, started_at) VALUES (?, ?, ?, 'Studio Session 1', 'active', NOW(6))`, sessionID, userID, deviceID)
+	return err
+}
+
+func connectionUUID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// RecordConnect records the connection in bridge_connections and increments reconnect_count
+// only if a prior connection for this device already exists.
+func (s *SQLStore) RecordConnect(ctx context.Context, userID, deviceID string, now time.Time) (string, error) {
+	if err := s.check(ctx); err != nil {
+		return "", err
+	}
+	connID, err := connectionUUID()
+	if err != nil {
+		return "", fmt.Errorf("bridgehub: generate connection id: %w", err)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("bridgehub: begin connect tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var priorCount int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_connections WHERE device_id = ? AND user_id = ?`, deviceID, userID).Scan(&priorCount)
+	if err != nil {
+		return "", fmt.Errorf("bridgehub: check prior connections: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO bridge_connections (id, user_id, device_id, connected_at) VALUES (?, ?, ?, ?)`,
+		connID, userID, deviceID, now.UTC(),
+	); err != nil {
+		return "", fmt.Errorf("bridgehub: insert bridge_connection: %w", err)
+	}
+
+	if priorCount > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE devices SET reconnect_count = reconnect_count + 1 WHERE id = ? AND user_id = ?`,
+			deviceID, userID,
+		); err != nil {
+			return "", fmt.Errorf("bridgehub: increment reconnect_count: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("bridgehub: commit connect tx: %w", err)
+	}
+	return connID, nil
+}
+
+// RecordDisconnect updates bridge_connections with disconnected_at and sanitized reason.
+func (s *SQLStore) RecordDisconnect(ctx context.Context, connectionID string, now time.Time, reason string) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	if connectionID == "" {
+		return nil
+	}
+	var reasonVal sql.NullString
+	if reason != "" {
+		if len(reason) > 255 {
+			reason = reason[:255]
+		}
+		reasonVal = sql.NullString{String: reason, Valid: true}
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE bridge_connections SET disconnected_at = ?, disconnect_reason = ? WHERE id = ? AND disconnected_at IS NULL`,
+		now.UTC(), reasonVal, connectionID,
+	)
+	return err
+}
+
+// RecordHello updates device bridge_version, platform, and optional hostname from hello payload.
+func (s *SQLStore) RecordHello(ctx context.Context, userID, deviceID, bridgeVersion, platform, hostname string) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	if len(bridgeVersion) > 64 {
+		bridgeVersion = bridgeVersion[:64]
+	}
+	if len(platform) > 64 {
+		platform = platform[:64]
+	}
+	if len(hostname) > 255 {
+		hostname = hostname[:255]
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE devices SET 
+			bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END,
+			platform = CASE WHEN ? != '' THEN ? ELSE platform END,
+			hostname = CASE WHEN ? != '' THEN ? ELSE hostname END
+		 WHERE id = ? AND user_id = ?`,
+		bridgeVersion, bridgeVersion,
+		platform, platform,
+		hostname, hostname,
+		deviceID, userID,
+	)
+	return err
+}
+
+// RecordHeartbeat updates device last_heartbeat_at timestamp.
+func (s *SQLStore) RecordHeartbeat(ctx context.Context, userID, deviceID string, now time.Time) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE devices SET last_heartbeat_at = ? WHERE id = ? AND user_id = ?`,
+		now.UTC(), deviceID, userID,
+	)
+	return err
+}
+
+// RecordStatus updates device official_mcp_state.
+func (s *SQLStore) RecordStatus(ctx context.Context, userID, deviceID, mcpState string) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	if len(mcpState) > 32 {
+		mcpState = mcpState[:32]
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE devices SET official_mcp_state = ? WHERE id = ? AND user_id = ?`,
+		mcpState, deviceID, userID,
+	)
 	return err
 }

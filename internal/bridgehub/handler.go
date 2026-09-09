@@ -2,9 +2,11 @@ package bridgehub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -171,15 +173,83 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enforce the frame bound immediately, before any application data.
 	ws.SetReadLimit(int64(h.cfg.MaxEnvelopeBytes))
-
 	conn := h.newConnection(ws, device)
 	if replaced := h.registry.Register(device.DeviceID, conn); replaced != nil {
 		replaced.close(websocket.StatusPolicyViolation, reasonSuperseded)
 	}
+
+	telemetryQueue := make(chan func(), 64)
+	var telemetryMu sync.Mutex
+	telemetryClosed := false
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		for action := range telemetryQueue {
+			action()
+		}
+	}()
+
+	nowFn := h.cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
+	queueTelemetry := func(action func()) {
+		telemetryMu.Lock()
+		defer telemetryMu.Unlock()
+		if telemetryClosed {
+			return
+		}
+		// Non-blocking send; if buffer is full, drop non-critical update.
+		select {
+		case telemetryQueue <- action:
+		default:
+		}
+	}
+
+	var connectionID string
+	recordConnectOnce := func() {
+		dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+		defer cancel()
+		currConn, isCurrent := h.registry.Get(device.DeviceID)
+		if !isCurrent || currConn != conn {
+			return
+		}
+		var err error
+		connectionID, err = h.cfg.Store.RecordConnect(dbCtx, device.UserID, device.DeviceID, nowFn())
+		_ = err
+	}
+
+	conn.onPong = func() {
+		pongTime := nowFn()
+		queueTelemetry(func() {
+			currConn, isCurrent := h.registry.Get(device.DeviceID)
+			if !isCurrent || currConn != conn {
+				return
+			}
+			dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+			defer cancel()
+			_ = h.cfg.Store.RecordHeartbeat(dbCtx, device.UserID, device.DeviceID, pongTime)
+		})
+	}
+
 	conn.start()
 	go h.reauthLoop(conn)
-	// The connection now runs entirely on hub-scoped contexts.
-	h.serve(conn)
+
+	defer func() {
+		telemetryMu.Lock()
+		telemetryClosed = true
+		close(telemetryQueue)
+		telemetryMu.Unlock()
+		<-workerDone
+		if connectionID != "" {
+			dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+			defer cancel()
+			_ = h.cfg.Store.RecordDisconnect(dbCtx, connectionID, nowFn(), "")
+		}
+	}()
+
+	h.serve(conn, queueTelemetry, recordConnectOnce)
 }
 
 func (h *Hub) newConnection(ws *websocket.Conn, device Device) *Connection {
@@ -194,7 +264,7 @@ func (h *Hub) newConnection(ws *websocket.Conn, device Device) *Connection {
 
 // serve is the per-connection read loop. It blocks the HTTP goroutine until
 // the connection ends, then removes the connection from the registry.
-func (h *Hub) serve(conn *Connection) {
+func (h *Hub) serve(conn *Connection, queueTelemetry func(func()), recordConnectOnce func()) {
 	defer h.registry.removeIfCurrent(conn.device.DeviceID, conn)
 
 	hello := make(chan struct{})
@@ -207,6 +277,10 @@ func (h *Hub) serve(conn *Connection) {
 	}()
 
 	helloSeen := false
+	nowFn := h.cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
 	for {
 		_, data, err := conn.ws.Read(conn.readCtx)
 		if err != nil {
@@ -231,7 +305,63 @@ func (h *Hub) serve(conn *Connection) {
 			}
 			helloSeen = true
 			close(hello)
+			var helloPayload struct {
+				BridgeVersion string `json:"bridge_version"`
+				Platform      string `json:"platform"`
+				Hostname      string `json:"hostname"`
+			}
+			if err := json.Unmarshal(env.Payload, &helloPayload); err == nil {
+				queueTelemetry(func() {
+					currConn, isCurrent := h.registry.Get(conn.device.DeviceID)
+					if !isCurrent || currConn != conn {
+						return
+					}
+					recordConnectOnce()
+					dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+					defer cancel()
+					_ = h.cfg.Store.RecordHello(dbCtx, conn.device.UserID, conn.device.DeviceID, helloPayload.BridgeVersion, helloPayload.Platform, helloPayload.Hostname)
+				})
+			} else {
+				queueTelemetry(func() {
+					recordConnectOnce()
+				})
+			}
 			continue
+		}
+		if env.Type == bridgeproto.TypeHeartbeat {
+			hbTime := nowFn()
+			queueTelemetry(func() {
+				currConn, isCurrent := h.registry.Get(conn.device.DeviceID)
+				if !isCurrent || currConn != conn {
+					return
+				}
+				dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+				defer cancel()
+				_ = h.cfg.Store.RecordHeartbeat(dbCtx, conn.device.UserID, conn.device.DeviceID, hbTime)
+			})
+		}
+		if env.Type == bridgeproto.TypeStatus {
+			var statusPayload map[string]json.RawMessage
+			if err := json.Unmarshal(env.Payload, &statusPayload); err == nil {
+				if rawReady, ok := statusPayload["mcp_ready"]; ok {
+					var ready bool
+					if err := json.Unmarshal(rawReady, &ready); err == nil {
+						mcpState := "stopped"
+						if ready {
+							mcpState = "ready"
+						}
+						queueTelemetry(func() {
+							currConn, isCurrent := h.registry.Get(conn.device.DeviceID)
+							if !isCurrent || currConn != conn {
+								return
+							}
+							dbCtx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+							defer cancel()
+							_ = h.cfg.Store.RecordStatus(dbCtx, conn.device.UserID, conn.device.DeviceID, mcpState)
+						})
+					}
+				}
+			}
 		}
 		if h.cfg.OnEnvelope != nil && env.Type != bridgeproto.TypeHeartbeat {
 			h.cfg.OnEnvelope(conn.ctx, conn.device, env)

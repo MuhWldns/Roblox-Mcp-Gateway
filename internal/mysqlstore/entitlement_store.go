@@ -144,6 +144,25 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 		if deviceStatus != "active" {
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: device %s is %s", in.DeviceID, deviceStatus)
 		}
+		name := in.Name
+		if name == "" {
+			name = in.DeviceID
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE devices SET 
+				name = CASE WHEN ? != '' THEN ? ELSE name END,
+				hostname = CASE WHEN ? != '' THEN ? ELSE hostname END,
+				platform = CASE WHEN ? != '' THEN ? ELSE platform END,
+				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END
+			 WHERE id = ? AND user_id = ?`,
+			in.Name, in.Name,
+			in.Hostname, in.Hostname,
+			in.Platform, in.Platform,
+			in.BridgeVersion, in.BridgeVersion,
+			in.DeviceID, in.UserID,
+		); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE device_credentials SET revoked_at = ? WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL`,
 			now, in.DeviceID, in.UserID,
@@ -211,12 +230,42 @@ func (s *EntitlementStore) BindFirstDevice(ctx context.Context, now time.Time, i
 		}
 		return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert trial identity: %w", err)
 	}
+	name := in.Name
+	if name == "" {
+		name = in.DeviceID
+	}
 	if deviceUserID == "" {
+		var hostname, platform, bridgeVersion sql.NullString
+		if in.Hostname != "" {
+			hostname = sql.NullString{String: in.Hostname, Valid: true}
+		}
+		if in.Platform != "" {
+			platform = sql.NullString{String: in.Platform, Valid: true}
+		}
+		if in.BridgeVersion != "" {
+			bridgeVersion = sql.NullString{String: in.BridgeVersion, Valid: true}
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO devices (id, user_id, name, status) VALUES (?, ?, ?, 'active')`,
-			in.DeviceID, in.UserID, in.DeviceID,
+			`INSERT INTO devices (id, user_id, name, hostname, platform, bridge_version, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+			in.DeviceID, in.UserID, name, hostname, platform, bridgeVersion,
 		); err != nil {
 			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: insert device: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE devices SET 
+				name = CASE WHEN ? != '' THEN ? ELSE name END,
+				hostname = CASE WHEN ? != '' THEN ? ELSE hostname END,
+				platform = CASE WHEN ? != '' THEN ? ELSE platform END,
+				bridge_version = CASE WHEN ? != '' THEN ? ELSE bridge_version END
+			 WHERE id = ? AND user_id = ?`,
+			in.Name, in.Name,
+			in.Hostname, in.Hostname,
+			in.Platform, in.Platform,
+			in.BridgeVersion, in.BridgeVersion,
+			in.DeviceID, in.UserID,
+		); err != nil {
+			return entitlement.Entitlement{}, entitlement.Binding{}, fmt.Errorf("mysqlstore: update device metadata: %w", err)
 		}
 	}
 	credentialID, err := identityUUID()

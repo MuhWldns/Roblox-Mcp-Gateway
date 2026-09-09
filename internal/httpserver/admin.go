@@ -247,41 +247,41 @@ func (a *adminAPI) identityView(ctx context.Context, userID string) *adminIdenti
 }
 
 type adminDeviceView struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	Hostname       *string `json:"hostname"`
-	Platform       *string `json:"platform"`
-	BridgeVersion  *string `json:"bridge_version"`
-	Status         string  `json:"status"`
-	Online         bool    `json:"online"`
-	LastHeartbeat  *string `json:"last_heartbeat"`
-	MCPState       *string `json:"mcp_state"`
-	ReconnectCount int     `json:"reconnect_count"`
-	LastError      *string `json:"last_error"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Hostname         *string `json:"hostname"`
+	Platform         *string `json:"platform"`
+	BridgeVersion    *string `json:"bridge_version"`
+	Status           string  `json:"status"`
+	Online           bool    `json:"online"`
+	LastHeartbeatAt  *string `json:"last_heartbeat_at"`
+	OfficialMCPState *string `json:"official_mcp_state"`
+	ReconnectCount   int     `json:"reconnect_count"`
+	LastError        *string `json:"last_error"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
 func (a *adminAPI) deviceViews(devices []dashboard.DeviceRow) []adminDeviceView {
 	views := make([]adminDeviceView, 0, len(devices))
 	for _, device := range devices {
 		v := adminDeviceView{
-			ID:             device.ID,
-			Name:           device.Name,
-			Hostname:       device.Hostname,
-			Platform:       device.Platform,
-			BridgeVersion:  device.BridgeVersion,
-			Status:         device.Status,
-			Online:         a.registry != nil && a.registry.Online(device.ID),
-			MCPState:       device.MCPState,
-			ReconnectCount: device.ReconnectCount,
-			LastError:      device.LastError,
-			CreatedAt:      device.CreatedAt.UTC().Format(timeFormat),
-			UpdatedAt:      device.UpdatedAt.UTC().Format(timeFormat),
+			ID:               device.ID,
+			Name:             device.Name,
+			Hostname:         device.Hostname,
+			Platform:         device.Platform,
+			BridgeVersion:    device.BridgeVersion,
+			Status:           device.Status,
+			Online:           a.registry != nil && a.registry.Online(device.ID),
+			OfficialMCPState: device.MCPState,
+			ReconnectCount:   device.ReconnectCount,
+			LastError:        device.LastError,
+			CreatedAt:        device.CreatedAt.UTC().Format(timeFormat),
+			UpdatedAt:        device.UpdatedAt.UTC().Format(timeFormat),
 		}
 		if device.LastHeartbeat != nil {
 			ts := device.LastHeartbeat.UTC().Format(timeFormat)
-			v.LastHeartbeat = &ts
+			v.LastHeartbeatAt = &ts
 		}
 		views = append(views, v)
 	}
@@ -695,6 +695,68 @@ func (a *adminAPI) extend(w http.ResponseWriter, r *http.Request) {
 		a.releaseCase(fields["case id"])
 		writeAdminError(w, err)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// restoreDevice un-revokes a revoked device so it can be re-enrolled/paired.
+func (a *adminAPI) restoreDevice(w http.ResponseWriter, r *http.Request) {
+	_, err := sessionUserID(r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var body struct {
+		UserID   string `json:"user_id"`
+		DeviceID string `json:"device_id"`
+	}
+	if !decodeMutationBody(w, r, &body) {
+		return
+	}
+	userID := strings.TrimSpace(body.UserID)
+	deviceID := strings.TrimSpace(body.DeviceID)
+	if userID == "" || deviceID == "" {
+		writeAPIError(w, http.StatusBadRequest, "user_id and device_id are required")
+		return
+	}
+	now := time.Now
+	if a.now != nil {
+		now = a.now
+	}
+	correlation := requestIDFromContext(r.Context())
+	err = a.store.RestoreDevice(r.Context(), correlation, now(), userID, deviceID)
+	if err != nil {
+		if errors.Is(err, dashboard.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "device not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "restore device unavailable")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// disconnectDevice terminates the live Bridge WebSocket connection without revoking the device.
+func (a *adminAPI) disconnectDevice(w http.ResponseWriter, r *http.Request) {
+	_, err := sessionUserID(r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var body struct {
+		UserID   string `json:"user_id"`
+		DeviceID string `json:"device_id"`
+	}
+	if !decodeMutationBody(w, r, &body) {
+		return
+	}
+	deviceID := strings.TrimSpace(body.DeviceID)
+	if deviceID == "" {
+		writeAPIError(w, http.StatusBadRequest, "device_id is required")
+		return
+	}
+	if a.registry != nil {
+		a.registry.Disconnect(deviceID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

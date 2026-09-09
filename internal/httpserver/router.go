@@ -235,6 +235,8 @@ func NewRouter(cfg Config) (http.Handler, error) {
 		api.Handle("POST /api/v1/admin/transfers", adminBound(admin.transfer))
 		api.Handle("POST /api/v1/admin/recoveries", adminBound(admin.recover))
 		api.Handle("POST /api/v1/admin/trial-extensions", adminBound(admin.extend))
+		api.Handle("POST /api/v1/admin/devices/restore", adminBound(admin.restoreDevice))
+		api.Handle("POST /api/v1/admin/devices/disconnect", adminBound(admin.disconnectDevice))
 	}
 
 	mux := http.NewServeMux()

@@ -178,7 +178,7 @@ describe("dashboard shell routing", () => {
     await renderShellAt("/devices");
 
     expect(await screen.findByTestId("error-page")).toBeTruthy();
-    expect(screen.getByText("Something went wrong")).toBeTruthy();
+    expect(screen.getByText(/temporarily unavailable/i)).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByTestId("page-devices")).toBeTruthy();

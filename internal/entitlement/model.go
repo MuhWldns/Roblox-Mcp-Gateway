@@ -39,6 +39,10 @@ type FirstDeviceBinding struct {
 	Provider         string
 	ProviderSubject  string
 	DeviceID         string
+	Name             string
+	Hostname         string
+	Platform         string
+	BridgeVersion    string
 	CredentialDigest [32]byte
 	AuditCorrelation string
 }
