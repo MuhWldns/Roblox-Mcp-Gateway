@@ -55,6 +55,7 @@ type connectionOptions struct {
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 	onPong            func()
+	onSlowConsumer    func()
 }
 
 // Connection wraps one upgraded Bridge WebSocket with a bounded writer queue
@@ -69,6 +70,7 @@ type Connection struct {
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 	onPong            func()
+	onSlowConsumer    func()
 	ctx               context.Context
 	cancel            context.CancelFunc
 	readCtx           context.Context
@@ -106,6 +108,7 @@ func newConnection(parent context.Context, ws *websocket.Conn, device Device, op
 		heartbeatInterval: opts.heartbeatInterval,
 		heartbeatTimeout:  opts.heartbeatTimeout,
 		onPong:            opts.onPong,
+		onSlowConsumer:    opts.onSlowConsumer,
 		ctx:               ctx,
 		cancel:            cancel,
 		readCtx:           readCtx,
@@ -155,6 +158,9 @@ func (c *Connection) enqueue(env bridgeproto.Envelope) error {
 	case c.send <- data:
 		return nil
 	default:
+		if c.onSlowConsumer != nil {
+			c.onSlowConsumer()
+		}
 		c.closeLocked(websocket.StatusPolicyViolation, reasonSlowConsumer)
 		return ErrSlowConsumer
 	}

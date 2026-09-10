@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"robloxkit/internal/entitlement"
+	"robloxkit/internal/metrics"
 	"robloxkit/pkg/bridgeproto"
 )
 
@@ -51,6 +52,8 @@ type Config struct {
 	// OnEnvelope receives validated inbound envelopes after the hello
 	// handshake. Heartbeat envelopes are consumed by the hub itself.
 	OnEnvelope func(ctx context.Context, device Device, env bridgeproto.Envelope)
+	// Metrics receives aggregate connection lifecycle and pressure events.
+	Metrics *metrics.Registry
 }
 
 const (
@@ -174,7 +177,12 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Enforce the frame bound immediately, before any application data.
 	ws.SetReadLimit(int64(h.cfg.MaxEnvelopeBytes))
 	conn := h.newConnection(ws, device)
-	if replaced := h.registry.Register(device.DeviceID, conn); replaced != nil {
+	replaced := h.registry.Register(device.DeviceID, conn)
+	if h.cfg.Metrics != nil {
+		h.cfg.Metrics.BridgeConnected(replaced != nil)
+		defer h.cfg.Metrics.BridgeDisconnected()
+	}
+	if replaced != nil {
 		replaced.close(websocket.StatusPolicyViolation, reasonSuperseded)
 	}
 
@@ -259,6 +267,11 @@ func (h *Hub) newConnection(ws *websocket.Conn, device Device) *Connection {
 		writeTimeout:      h.cfg.WriteTimeout,
 		heartbeatInterval: h.cfg.HeartbeatInterval,
 		heartbeatTimeout:  h.cfg.HeartbeatTimeout,
+		onSlowConsumer: func() {
+			if h.cfg.Metrics != nil {
+				h.cfg.Metrics.SlowConsumerDropped()
+			}
+		},
 	})
 }
 

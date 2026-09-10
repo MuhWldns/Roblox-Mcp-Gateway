@@ -25,6 +25,7 @@ import (
 	"robloxkit/internal/httpserver"
 	"robloxkit/internal/mcpgateway"
 	"robloxkit/internal/mcpoauth"
+	"robloxkit/internal/metrics"
 	"robloxkit/internal/mysqlstore"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
@@ -158,6 +159,7 @@ func main() {
 	// The readiness gate wraps the pool ping: while it is open, probes
 	// reflect the database; once shutdown marks it unready, every probe
 	// answers unavailable immediately without touching the pool.
+	runtimeMetrics := metrics.New(time.Now())
 	gate := health.NewGate(db, logger)
 	probes := health.NewHandler(gate, log.New(slogWriter{logger: logger}, "", 0))
 
@@ -173,6 +175,7 @@ func main() {
 		HeartbeatInterval: config.BridgeHeartbeatInterval,
 		HeartbeatTimeout:  config.BridgeTimeout,
 		QueueDepth:        config.BridgeQueueLimit,
+		Metrics:           runtimeMetrics,
 		MaxEnvelopeBytes:  config.BridgeMaxMessageBytes,
 		OnEnvelope: func(ctx context.Context, device bridgehub.Device, env bridgeproto.Envelope) {
 			if gatewayHandler != nil {
@@ -245,6 +248,7 @@ func main() {
 		Registry:       hub.Registry(),
 		Pending:        mcpgateway.NewPending(256),
 		Limiter:        mcpLimiter,
+		Metrics:        runtimeMetrics,
 		Pepper:         pepper,
 		Resource:       resource.String(),
 		AllowedOrigins: []string{config.AllowedOrigin.String()},
@@ -276,6 +280,10 @@ func main() {
 			Entitlements: entitlements,
 			OAuth:        oauthStore,
 			AdminUsers:   splitAndTrim(env("ADMIN_USER_IDS", ""), ","),
+		},
+		Metrics: func() metrics.Snapshot {
+			depth, capacity := gateway.AuditQueueSnapshot()
+			return runtimeMetrics.Snapshot(time.Now(), depth, capacity, uint64(gateway.SuccessAuditDropped()))
 		},
 		Health:         probes,
 		Metadata:       &metadata,

@@ -26,6 +26,7 @@ import (
 	"robloxkit/internal/health"
 	"robloxkit/internal/httpserver"
 	"robloxkit/internal/mcpoauth"
+	"robloxkit/internal/metrics"
 	"robloxkit/internal/mysqlstore"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
@@ -152,6 +153,7 @@ type routerStack struct {
 	downloadMetadata *device.DownloadMetadataHandler
 	registry         *fakeRegistry
 	readiness        health.Checker
+	metrics          *metrics.Registry
 	metadata         mcpoauth.Metadata
 	allowedURL       string
 }
@@ -217,6 +219,7 @@ func newRouterStackWithReadiness(t *testing.T, ready health.Checker) *routerStac
 		downloadMetadata: downloadMetadata,
 		registry:         &fakeRegistry{},
 		readiness:        ready,
+		metrics:          metrics.New(clock.Now()),
 		metadata:         metadata,
 		allowedURL:       "https://app.example.test",
 	}
@@ -241,7 +244,10 @@ func (s *routerStack) buildRouter(t *testing.T, mutate func(*httpserver.Config))
 		Registry:         s.registry,
 		Health:           health.NewHandler(s.readiness, nil),
 		Metadata:         &s.metadata,
-		AllowedOrigin:    mustParseURL(t, s.allowedURL),
+		Metrics: func() metrics.Snapshot {
+			return s.metrics.Snapshot(time.Date(2026, 9, 4, 11, 0, 0, 0, time.UTC), 2, 10, 1)
+		},
+		AllowedOrigin: mustParseURL(t, s.allowedURL),
 	}
 	if mutate != nil {
 		mutate(cfg)
@@ -351,6 +357,28 @@ func (s *routerStack) insertLicense(t *testing.T, licenseID, userID string, slot
 func (s *routerStack) insertBinding(t *testing.T, bindingID, licenseID, userID, deviceID string) {
 	s.exec(t, `INSERT INTO license_device_bindings (id, user_id, license_id, device_id, slot_ordinal, status) VALUES (?, ?, ?, ?, 1, 'active')`,
 		bindingID, userID, licenseID, deviceID)
+}
+
+func TestMetricsEndpointIsLoopbackOnly(t *testing.T) {
+	stack := newRouterStack(t)
+	local := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	local.RemoteAddr = "127.0.0.1:1234"
+	localResponse := httptest.NewRecorder()
+	stack.router.ServeHTTP(localResponse, local)
+	if localResponse.Code != http.StatusOK {
+		t.Fatalf("loopback status = %d, want 200", localResponse.Code)
+	}
+	if body := localResponse.Body.String(); !strings.Contains(body, "robloxkit_audit_queue_depth 2") {
+		t.Fatalf("metrics body missing audit depth: %q", body)
+	}
+
+	remote := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	remote.RemoteAddr = "203.0.113.9:1234"
+	remoteResponse := httptest.NewRecorder()
+	stack.router.ServeHTTP(remoteResponse, remote)
+	if remoteResponse.Code != http.StatusForbidden {
+		t.Fatalf("remote status = %d, want 403", remoteResponse.Code)
+	}
 }
 
 // auditEvent is one audit_logs row of interest.

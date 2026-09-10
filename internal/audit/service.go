@@ -139,6 +139,14 @@ func (q *Queue) Pending() int {
 	return len(q.pending) + q.inflight
 }
 
+// Capacity reports the queue's fixed event capacity.
+func (q *Queue) Capacity() int {
+	if q == nil {
+		return 0
+	}
+	return q.capacity
+}
+
 // Serve drains the queue until ctx is done. Owners run it in one background
 // goroutine; Record stays non-blocking regardless of persistence latency.
 func (q *Queue) Serve(ctx context.Context) {

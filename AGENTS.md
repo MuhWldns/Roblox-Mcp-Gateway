@@ -3,7 +3,7 @@
 ## Project Overview
 **RobloxKit / Roblox MCP Gateway** is a secure, remote bridge connecting AI clients (ChatGPT, Claude) to local Roblox Studio instances over the Model Context Protocol (MCP).
 - **Core Problem Solved**: Allows remote AI assistants to safely interact with a user's locally running Roblox Studio via an outbound-only WebSocket bridge, without exposing local network ports.
-- **Key Capabilities**: MCP Streamable HTTP gateway, OAuth 2.0 server (RFC 6749 / RFC 7591 / RFC 8414), Roblox OAuth login, device enrollment, multi-device management, licensing & trial enforcement, token pepper hashing, CSRF protection, and audit logging.
+- **Key Capabilities**: MCP Streamable HTTP gateway, OAuth 2.0 server (RFC 6749 / RFC 7591 / RFC 8414), Roblox OAuth login, device enrollment, multi-device management, licensing & trial enforcement, token pepper hashing, CSRF protection, audit logging, and bounded process-local observability.
 
 ---
 
@@ -41,6 +41,7 @@ ChatGPT / Claude (MCP Client)          Browser (SPA Dashboard)
 4. **WSS Message Relay**: Request is framed as a strict `pkg/bridgeproto.Message` envelope and forwarded over an active authenticated WebSocket (`bridgehub`, which enforces SHA-256 credential digests, hello handshake, and connection uniqueness per device).
 5. **Local Execution**: `bridgeapp` receives envelope and relays to child MCP process via `mcpprocess` through stdio using JSON-RPC 2.0 frames to communicate with the official Roblox MCP server.
 6. **Response & Audit**: Result returns over WSS, correlated via `Pending` tracker, audited with sensitive argument/token redaction (`audit`), and streamed back to the client over HTTP SSE/JSON-RPC.
+7. **Observability**: `internal/metrics` aggregates bridge lifecycle, MCP concurrency/latency, and audit queue pressure without user/device labels. Prometheus text is available only from the backend loopback `/metrics`; the dashboard reads the session- and admin-gated `/api/v1/admin/metrics` endpoint.
 ---
 
 ## Key Directories
@@ -62,6 +63,7 @@ ChatGPT / Claude (MCP Client)          Browser (SPA Dashboard)
 │   ├── entitlement/        # License slots, trials, and active subscription enforcement
 │   ├── httpserver/         # HTTP router, middleware (CSRF, auth, rate limit, trusted proxies)
 │   ├── mcpgateway/         # MCP Streamable HTTP endpoint, tool registry, and relay loop
+│   ├── metrics/            # Bounded process-local counters, latency window, and Prometheus renderer
 │   ├── mcpoauth/           # OAuth 2.0 provider (Fosite integration, dynamic client registration)
 │   ├── mcpprocess/         # Child process spawner for stdio MCP servers (JSON-RPC 2.0)
 │   ├── mysqlstore/         # Database persistence layer (sessions, OAuth, devices, audit, licenses)
@@ -144,6 +146,7 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Explicit Dependency Injection**: Construct dependencies in package constructors (e.g., `NewServer(...)`, `NewService(...)`). Avoid global mutable state.
 - **Concurrency & Context**: Always propagate `context.Context`. Graceful teardown uses `signal.NotifyContext` with explicit timeout budgets (`shutdownBudget = 30 * time.Second`).
 - **Data Protection**: Store all sensitive tokens/credentials hashed using SHA-256 with a secret pepper (`TOKEN_PEPPER`). Never store plaintext tokens or credentials; cookies use `__Host-` prefixes. For device fingerprints, store only the 32-byte binary HMAC-SHA256 digest derived from Windows hardware identifiers—never raw identifiers. Trial uniqueness is enforced via unique device fingerprint index, rejecting cross-account device reuse while preserving `NULL` for historical rows until same-owner re-pairing backfills them.
+- **Metrics Cardinality**: Process metrics must remain aggregate and bounded. Never add user IDs, device IDs, studio IDs, grant IDs, request IDs, or other unbounded values as metric labels. `/metrics` remains loopback-only; browser access goes through the admin-gated JSON endpoint.
 
 ### Bridge Client (`cmd/bridge`)
 - **Modes**: Automatically determines runtime mode (Windows Service mode under SCM, remote daemon, local test runner, or smart first-run wizard).
@@ -156,6 +159,7 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Security**: Anti-CSRF token managed in module memory; credentials sent via standard `credentials: "include"`; zero secrets stored in `localStorage`.
 - **Tailwind CSS v4**: Utility-first styling via `@tailwindcss/vite`.
 - **API Client**: Centralized in `web/src/api/client.ts` with typed error classes (`UnauthorizedError`, `ApiError`).
+- **Admin Metrics**: `/admin/metrics` is read-only, refreshes every five seconds only while visible, and receives data from `/api/v1/admin/metrics`; authorization remains server-side.
 ---
 
 ## Important Files & Entry Points
@@ -167,9 +171,11 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 | `internal/appconfig/config.go` | Validates environment variables (`PUBLIC_APP_URL`, `MYSQL_DSN`, `TOKEN_PEPPER`, etc.) |
 | `internal/mcpgateway/server.go` | Implements MCP Streamable HTTP gateway endpoint and tool routing |
 | `internal/bridgehub/registry.go`| Manages active WebSocket connections from remote bridge instances |
+| `internal/metrics/metrics.go` | Bounded process metrics registry and fixed-cardinality Prometheus exposition |
 | `pkg/bridgeproto/message.go` | Defines envelope structure, request/response IDs, and payload validation for bridge communication |
 | `web/src/main.tsx` & `router.tsx` | Frontend entry point, routing hierarchy, and auth protection loader |
 | `migrations/` | Forward-only SQL migrations (`00001` through `00008`) embedded via `embed.go` |
+| `web/src/routes/AdminMetrics.tsx` | Administrator observability dashboard for gateway load and pressure |
 
 ---
 
@@ -181,6 +187,8 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Operating Environment**:
   - Server: Linux / VPS under PM2 (`fork` mode, single instance) behind Nginx reverse proxy.
   - Bridge: Windows (standalone `.exe` or registered Windows Service).
+  - Production gateway: application listens on `127.0.0.1:8081`; local Nginx listens on `8080` and proxies public routes.
+  - Prometheus scraping: use `http://127.0.0.1:8081/metrics` on the VPS. Do not add an Nginx public route for it.
 
 ---
 
@@ -191,4 +199,5 @@ Migrations are managed with `goose` and embedded in `migrations/`:
 - **Frontend Tests**: Component and route testing using `vitest` + `@testing-library/react` + `jsdom`.
 - **E2E Production Matrix**: `internal/e2egate/matrix_test.go` runs a 14-row sequential scenario suite covering user registration, enrollment, OAuth flows, and tool execution.
 - **Trial Abuse & Entitlement Tests**: Validates trial policy and cross-account device fingerprint collision prevention (rejecting multi-account trial reuse on the same computer while allowing same-owner re-pairing and legacy `NULL` backfills).
+- **Release Hygiene**: `scripts/build-release.ps1` must delete and recreate `bin/dist` before copying `web/dist`, preventing stale hashed assets from entering `SHA-256SUMS` and production releases.
 - **Verification Rule**: Always verify code changes by running targeted package tests (`go test ./internal/...`) and frontend checks (`npm test && npm run typecheck`).

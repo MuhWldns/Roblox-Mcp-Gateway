@@ -28,6 +28,7 @@ import (
 	"robloxkit/internal/entitlement"
 	"robloxkit/internal/httpserver"
 	"robloxkit/internal/mcpoauth"
+	"robloxkit/internal/metrics"
 	"robloxkit/pkg/bridgeproto"
 )
 
@@ -73,6 +74,8 @@ type Config struct {
 	// Limiter bounds request rates and concurrent tool calls per grant
 	// and per user before Bridge delivery.
 	Limiter *httpserver.MCPLimiter
+	// Metrics receives aggregate MCP relay observations.
+	Metrics *metrics.Registry
 	// Pepper keys connector access-token digests; it must equal the
 	// authorization server's pepper.
 	Pepper []byte
@@ -207,6 +210,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		Registry:         cfg.Registry,
 		Pending:          cfg.Pending,
 		Store:            cfg.Store,
+		Metrics:          cfg.Metrics,
 		Timeout:          cfg.RequestTimeout,
 		MaxEnvelopeBytes: defaultMaxEnvelopeBytes,
 	})
@@ -390,6 +394,14 @@ func (g *Gateway) SuccessAuditDropped() int64 {
 		return 0
 	}
 	return g.success.Dropped()
+}
+
+// AuditQueueSnapshot reports current success-audit pressure.
+func (g *Gateway) AuditQueueSnapshot() (depth, capacity int) {
+	if g == nil || g.success == nil {
+		return 0, 0
+	}
+	return g.success.Pending(), g.success.Capacity()
 }
 
 // withCorrelationHeader seeds the audit correlation id for one request.

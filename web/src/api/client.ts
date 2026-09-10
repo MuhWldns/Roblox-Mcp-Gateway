@@ -130,6 +130,13 @@ export interface DiagnosticsResponse {
   devices: DiagnosticDeviceView[];
 }
 
+export interface AdminMetricsResponse {
+  uptime_seconds: number;
+  bridge: { online: number; reconnects: number; slow_consumer_drops: number };
+  mcp: { inflight: number; total_requests: number; latency_ms: { p50: number; p95: number; p99: number } };
+  audit: { queue_depth: number; queue_capacity: number; dropped: number };
+}
+
 export interface RotatedDeviceCredential {
   device_id: string;
   device_credential: string;
@@ -497,6 +504,10 @@ export async function getAdminTrialPreview(userId: string): Promise<AdminTrialPr
   return request<AdminTrialPreview>(
     `/api/v1/admin/users/${encodeURIComponent(userId)}/trial-preview`,
   );
+}
+
+export async function getAdminMetrics(): Promise<AdminMetricsResponse> {
+  return request<AdminMetricsResponse>("/api/v1/admin/metrics");
 }
 
 export async function adminTransferDevice(payload: AdminTransferRequest): Promise<void> {

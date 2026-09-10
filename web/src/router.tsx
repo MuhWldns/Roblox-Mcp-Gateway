@@ -3,6 +3,7 @@ import { UnauthorizedError, type MeResponse, getMe } from "./api/client";
 import AppShell from "./layout/AppShell";
 import AccountRecovery from "./routes/AccountRecovery";
 import Admin from "./routes/Admin";
+import AdminMetrics from "./routes/AdminMetrics";
 import Connectors from "./routes/Connectors";
 import Devices from "./routes/Devices";
 import Diagnostics from "./routes/Diagnostics";
@@ -47,6 +48,7 @@ const dashboardSections: RouteObject[] = [
     path: "admin",
     children: [
       { index: true, element: <Admin /> },
+		{ path: "metrics", element: <AdminMetrics /> },
       { path: "transfer", element: <DeviceTransfer /> },
       { path: "recovery", element: <AccountRecovery /> },
       { path: "extension", element: <TrialExtension /> },

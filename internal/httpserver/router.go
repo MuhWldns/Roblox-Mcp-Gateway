@@ -26,6 +26,7 @@ import (
 	"robloxkit/internal/entitlement"
 	"robloxkit/internal/health"
 	"robloxkit/internal/mcpoauth"
+	"robloxkit/internal/metrics"
 	"robloxkit/internal/robloxauth"
 	"robloxkit/internal/session"
 )
@@ -96,6 +97,10 @@ type Config struct {
 	// The endpoints live inside the session and CSRF subtree; every
 	// request is additionally gated on the configured admin user ids.
 	Admin *AdminConfig
+
+	// Metrics supplies aggregate process metrics. When set, /metrics is
+	// loopback-only and the admin JSON snapshot is session/admin gated.
+	Metrics func() metrics.Snapshot
 
 	// Limits optionally enforces per-class endpoint rate limits over the
 	// mounted login, OAuth, enrollment, Bridge dial, admin execute, and
@@ -237,6 +242,11 @@ func NewRouter(cfg Config) (http.Handler, error) {
 		api.Handle("GET /api/v1/admin/users/{user_id}/transfer-preview", adminBound(admin.transferPreview))
 		api.Handle("GET /api/v1/admin/users/{user_id}/recovery-preview", adminBound(admin.recoveryPreview))
 		api.Handle("GET /api/v1/admin/users/{user_id}/trial-preview", adminBound(admin.trialPreview))
+		if cfg.Metrics != nil {
+			api.Handle("GET /api/v1/admin/metrics", adminBound(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, cfg.Metrics())
+			}))
+		}
 		api.Handle("POST /api/v1/admin/transfers", adminBound(admin.transfer))
 		api.Handle("POST /api/v1/admin/recoveries", adminBound(admin.recover))
 		api.Handle("POST /api/v1/admin/trial-extensions", adminBound(admin.extend))
@@ -261,6 +271,9 @@ func NewRouter(cfg Config) (http.Handler, error) {
 	}
 	mux.HandleFunc("GET /healthz", cfg.Health.Live)
 	mux.HandleFunc("GET /readyz", cfg.Health.Ready)
+	if cfg.Metrics != nil {
+		mux.Handle("GET /metrics", prometheusHandler(cfg.Metrics))
+	}
 	if err := mountMetadata(mux, *cfg.Metadata); err != nil {
 		return nil, err
 	}
@@ -292,6 +305,17 @@ func bodyLimit(cfg Config) int64 {
 		return cfg.MaxBodyBytes
 	}
 	return DefaultMaxBodyBytes
+}
+func prometheusHandler(snapshot func() metrics.Snapshot) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := RemotePrincipal(r)
+		if host != "127.0.0.1" && host != "::1" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_ = metrics.WritePrometheus(w, snapshot())
+	})
 }
 
 // mountMetadata registers the two OAuth discovery documents at the well-known

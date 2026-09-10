@@ -13,6 +13,7 @@ import (
 
 	"robloxkit/internal/bridgehub"
 	"robloxkit/internal/mcpoauth"
+	"robloxkit/internal/metrics"
 	"robloxkit/internal/routing"
 	"robloxkit/pkg/bridgeproto"
 )
@@ -56,6 +57,8 @@ type RelayConfig struct {
 	Timeout time.Duration
 	// MaxEnvelopeBytes bounds relayed envelopes; zero selects the default.
 	MaxEnvelopeBytes int
+	// Metrics receives aggregate call concurrency and latency observations.
+	Metrics *metrics.Registry
 }
 
 // Relay bridges SDK method calls to the grant target's Bridge connection:
@@ -67,6 +70,7 @@ type Relay struct {
 	pending  *Pending
 	store    bridgehub.Store
 	timeout  time.Duration
+	metrics  *metrics.Registry
 	limits   bridgeproto.Limits
 
 	ids atomic.Int64
@@ -96,6 +100,7 @@ func NewRelay(cfg RelayConfig) (*Relay, error) {
 		pending:  cfg.Pending,
 		store:    cfg.Store,
 		timeout:  cfg.Timeout,
+		metrics:  cfg.Metrics,
 		limits:   bridgeproto.Limits{MaxPayloadBytes: maxEnvelope},
 		statuses: make(map[string]deviceSnapshot),
 	}, nil
@@ -155,6 +160,8 @@ func (r *Relay) CallDetailed(ctx context.Context, sessionID string, grant mcpoau
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	finishMetrics := r.metrics.MCPCall()
+	defer finishMetrics()
 	if sessionID == "" {
 		return nil, CallTrace{}, fmt.Errorf("%w: session is required", ErrInvalidRequest)
 	}

@@ -31,6 +31,7 @@ export default function Admin() {
         Select a user, review the action, and confirm. Audit details and state
         checks are handled automatically—no support-case paperwork required.
       </p>
+		<Link to="/admin/metrics" className="mb-6 inline-flex min-h-10 items-center rounded-md border border-navy bg-navy px-4 text-sm font-semibold text-white hover:bg-navy-light">Open live metrics</Link>
       <h3 className="text-lg font-semibold text-navy mb-3">Users</h3>
       {error && <p role="alert">{error}</p>}
       {!busy && !error && users.length === 0 && <p>No registered users yet.</p>}

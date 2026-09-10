@@ -116,6 +116,9 @@ try {
 		(New-Object System.Text.UTF8Encoding($false))
 	)
 	# 4. Frontend artifacts ship inside the release.
+	if (Test-Path -LiteralPath $distOut) {
+		Remove-Item -LiteralPath $distOut -Recurse -Force
+	}
 	New-Item -ItemType Directory -Force -Path $distOut | Out-Null
 	Copy-Item -Path (Join-Path $webDist '*') -Destination $distOut -Recurse -Force
 
