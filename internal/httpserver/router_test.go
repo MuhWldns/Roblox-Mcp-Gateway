@@ -836,6 +836,25 @@ func TestRouterRejectsMisconfiguredStacks(t *testing.T) {
 	if err == nil || !errors.Is(err, httpserver.ErrInvalidConfig) {
 		t.Fatalf("partial config error = %v, want ErrInvalidConfig", err)
 	}
+	stack := newRouterStack(t)
+	cfg := &httpserver.Config{
+		Sessions:         stack.sessions,
+		RobloxAuth:       &robloxauth.Handler{SuccessRedirect: "/"},
+		IdentityReader:   stack.deviceStore,
+		Entitlements:     stack.entitlements,
+		Download:         stack.download,
+		DownloadMetadata: stack.downloadMetadata,
+		Enrollment:       stack.enrollment,
+		Dashboard:        stack.dashboard,
+		Registry:         stack.registry,
+		Health:           health.NewHandler(stack.readiness, nil),
+		Metadata:         &stack.metadata,
+		AllowedOrigin:    mustParseURL(t, stack.allowedURL),
+		TrustedProxies:   []string{"not-a-cidr"},
+	}
+	if _, err := httpserver.NewRouter(*cfg); err == nil || !errors.Is(err, httpserver.ErrInvalidConfig) {
+		t.Fatalf("invalid trusted proxy CIDR error = %v, want ErrInvalidConfig", err)
+	}
 }
 
 // --- Task 18: middleware behavior -----------------------------------------

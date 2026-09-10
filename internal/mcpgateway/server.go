@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -290,14 +289,7 @@ func (g *Gateway) Handler() http.Handler {
 			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		recorder := httptest.NewRecorder()
-		core.ServeHTTP(recorder, r)
-		for k, v := range recorder.Header() {
-			w.Header()[k] = v
-		}
-		w.WriteHeader(recorder.Code)
-		respBody := recorder.Body.Bytes()
-		_, _ = w.Write(respBody)
+		core.ServeHTTP(w, r)
 	})
 }
 
@@ -464,6 +456,12 @@ func (w *bearerChallengeWriter) WriteHeader(status int) {
 		w.Header().Set("WWW-Authenticate", w.challenge)
 	}
 	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *bearerChallengeWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // challengeHeader is the RFC 9728 challenge pointing at the gateway's

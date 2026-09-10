@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 import Download from "./Download";
 import Enroll from "./Enroll";
 import Login from "./Login";
-
 type MockRoute = { status?: number; json?: unknown };
 
 type RecordedCall = {
@@ -55,16 +54,6 @@ function installFetch(routes: Record<string, MockRoute | MockRoute[]>): Recorded
     }),
   );
   return calls;
-}
-
-function defer<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 function renderAt(path: string, element: React.ReactElement) {
@@ -171,8 +160,9 @@ describe("onboarding web flow", () => {
     expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
     expect(screen.getByText(/windows/)).toBeTruthy();
     expect(screen.getByText(/1\.4\.2/)).toBeTruthy();
-
-    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    const approveButton = screen.getByRole("button", { name: /approve/i });
+    expect(approveButton.hasAttribute("disabled")).toBe(false);
+    await userEvent.click(approveButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("approval-status").textContent).toMatch(/approved/i);
@@ -184,39 +174,65 @@ describe("onboarding web flow", () => {
   });
 
   it("shows the first-binding trial state once the device completes its exchange", async () => {
+    vi.useFakeTimers();
     const calls = installFetch({
-      [meUrl]: [{ json: freshMe }, { json: freshMe }, { json: activeTrialMe }],
-      [claimUrl]: { json: claim },
+      [meUrl]: [{ json: freshMe }, { json: activeTrialMe }],
+      [claimUrl]: [
+        { json: { ...claim, status: "pending" } },
+        { json: { ...claim, status: "pending" } },
+        { status: 404 },
+      ],
       [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
       [approveUrl]: { status: 204 },
     });
 
     renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
 
-    expect(await screen.findByTestId("device-hostname")).toBeTruthy();
-    expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
-
-    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("approval-status")).toBeTruthy();
-      expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
     });
 
-    const trial = await screen.findByTestId("trial-state", {}, { timeout: 5000 });
+    expect(screen.getByTestId("device-hostname")).toBeTruthy();
+    expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
+
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("approval-status")).toBeTruthy();
+    expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+
+    // During pending status, no extra /me requests should occur.
+    // The initial mount made 1 /me request; claim polling should only poll /claim while status is pending.
+    const meCallsInitial = calls.filter((c) => c.path === "/api/v1/me");
+    expect(meCallsInitial.length).toBe(1);
+
+    // Advance through poll ticks to 404 (tick 1 at 1500ms, tick 2 at 3000ms)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const trial = screen.getByTestId("trial-state");
     expect(trial.textContent).toMatch(/free trial active/i);
     expect(trial.textContent).toMatch(/2026-09-18/);
     expect(screen.queryByText("Waiting for your computer to finish connecting…")).toBeNull();
 
+    // After exchange completed (404 claim), exactly one additional /me call was made to verify trial.
+    const meCallsFinal = calls.filter((c) => c.path === "/api/v1/me");
+    expect(meCallsFinal.length).toBe(2);
+
     // Ensure polling stops once active trial is received
     const callCountAtCompletion = calls.length;
-    const { promise: delayPromise, resolve: delayResolve } = defer<void>();
-    setTimeout(delayResolve, 1200);
-    await delayPromise;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4500);
+    });
     expect(calls.length).toBe(callCountAtCompletion);
   });
 
   it("transitions from approved to terminal denial when claim status becomes license_required and stops polling", async () => {
+    vi.useFakeTimers();
     const calls = installFetch({
       [meUrl]: { json: freshMe },
       [claimUrl]: [
@@ -230,21 +246,32 @@ describe("onboarding web flow", () => {
 
     renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
 
-    expect(await screen.findByTestId("device-hostname")).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("device-hostname")).toBeTruthy();
     expect(screen.getByTestId("device-hostname").textContent).toBe("DESKTOP-ABC123");
 
-    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     // Initially approved state is rendered with indefinite waiting copy
-    await waitFor(() => {
-      expect(screen.getByTestId("approval-status")).toBeTruthy();
-      expect(screen.getByText("Computer approved")).toBeTruthy();
-      expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
-      expect(screen.queryByTestId("license-required-status")).toBeNull();
+    expect(screen.getByTestId("approval-status")).toBeTruthy();
+    expect(screen.getByText("Computer approved")).toBeTruthy();
+    expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+    expect(screen.queryByTestId("license-required-status")).toBeNull();
+
+    // Advance through poll ticks until license_required (tick 1 at 1500ms, tick 2 at 3000ms)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
     });
 
     // Once license_required is returned, terminal denial is rendered
-    const denialSection = await screen.findByTestId("license-required-status", {}, { timeout: 5000 });
+    const denialSection = screen.getByTestId("license-required-status");
     const alert = screen.getByRole("alert");
 
     // Exact operator-facing denial copy
@@ -259,13 +286,112 @@ describe("onboarding web flow", () => {
     // Ensure no technical language or internal details leaked
     const pageContent = denialSection.textContent ?? "";
     expect(pageContent).not.toMatch(/fingerprint|collision|trial[-_ ]reuse|status|code|403|409|json|api/i);
+    // During pending status leading to license_required, no repeated /me calls were made
+    const meCalls = calls.filter((c) => c.path === "/api/v1/me");
+    expect(meCalls.length).toBe(1); // Only the initial mount /me call
 
     // Record call count after denial and ensure polling has stopped
     const callCountAtDenial = calls.length;
-    const { promise: delayPromise, resolve: delayResolve } = defer<void>();
-    setTimeout(delayResolve, 1200);
-    await delayPromise;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4500);
+    });
     expect(calls.length).toBe(callCountAtDenial);
+  });
+
+  it("does not poll /me repeatedly while claim status remains pending", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [meUrl]: { json: freshMe },
+      [claimUrl]: { json: { ...claim, status: "pending" } },
+      [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
+      [approveUrl]: { status: 204 },
+    });
+
+    renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("device-hostname")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("approval-status")).toBeTruthy();
+    expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+
+    // Advance timers for 2 polling ticks (3000ms)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    // Verify claim was polled but /me was not fetched again during pending state
+    const meCalls = calls.filter((c) => c.path === "/api/v1/me");
+    expect(meCalls.length).toBe(1);
+
+    const claimCalls = calls.filter((c) => c.path === "/api/v1/enrollments/claim");
+    // 1 initial load + 2 poll ticks
+    expect(claimCalls.length).toBeGreaterThanOrEqual(2);
+    // Assert bounded frequency: in 3s with a 1.5s interval, at most 4 claim calls
+    expect(claimCalls.length).toBeLessThanOrEqual(5);
+  });
+
+  it("stops polling and displays actionable expired error on 410 without classifying active trial as pairing success", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [meUrl]: [{ json: freshMe }, { json: activeTrialMe }],
+      [claimUrl]: [
+        { json: { ...claim, status: "pending" } },
+        { status: 410 },
+      ],
+      [csrfUrl]: { json: { csrf_token: "csrf-token-1" } },
+      [approveUrl]: { status: 204 },
+    });
+
+    renderAt("/enroll?code=rkuc_TEST123", <Enroll />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("device-hostname")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("approval-status")).toBeTruthy();
+    expect(screen.getByText("Waiting for your computer to finish connecting…")).toBeTruthy();
+
+    // Advance timers for 1 polling tick (1500ms) to encounter 410
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+
+    // When 410 is encountered, pairing-expired terminal state is shown
+    const expiredSection = screen.getByTestId("pairing-expired-status");
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe("This pairing code has expired. Please start pairing again in Buildly Companion.");
+    expect(within(expiredSection).getByRole("link", { name: /back to setup/i }).getAttribute("href")).toBe("/setup");
+
+    // Crucial: Must never show connection success or trial-state active banner for this pairing
+    expect(screen.queryByTestId("trial-state")).toBeNull();
+    expect(screen.queryByTestId("approval-status")).toBeNull();
+    expect(screen.queryByText("Waiting for your computer to finish connecting…")).toBeNull();
+
+    // Polling must stop immediately and not query /me to falsely claim success
+    const meCalls = calls.filter((c) => c.path === "/api/v1/me");
+    expect(meCalls.length).toBe(1); // Only the initial mount /me call
+
+    const callCountAtExpiration = calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4500);
+    });
+    expect(calls.length).toBe(callCountAtExpiration);
   });
   it("never persists credentials or tokens in browser storage", async () => {
     const calls = installFetch({

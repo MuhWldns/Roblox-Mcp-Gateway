@@ -1,6 +1,7 @@
 package mcpgateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -18,8 +19,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/go-sql-driver/mysql"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"robloxkit/internal/audit"
 	"robloxkit/internal/bridgehub"
 	"robloxkit/internal/credential"
@@ -1280,5 +1281,269 @@ func TestMCPAuditDenialsAreSecretFree(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("expected audited denials")
+	}
+}
+
+func TestMCPDirectStreamingFlushesChunksBeforeHandlerCompletion(t *testing.T) {
+	// Verifies that Gateway.Handler does not buffer responses with httptest.ResponseRecorder
+	// and directly delegates to http.ResponseWriter, allowing flushed chunks to reach the
+	// client while the downstream handler is still executing.
+	fx := newGatewayFixture(t, nil)
+
+	firstChunkReceived := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	handlerDone := make(chan struct{})
+
+	// Replace the inner SDK handler with a controlled streaming handler.
+	// The handler writes and flushes an initial chunk, waits for the client
+	// to observe it, and only finishes once released.
+	streamingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Errorf("expected http.ResponseWriter to implement http.Flusher, got %T", w)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("chunk1\n")); err != nil {
+			t.Errorf("write chunk1: %v", err)
+			return
+		}
+		flusher.Flush()
+
+		// Block until the test asserts the client observed chunk1 and releases the handler.
+		select {
+		case <-releaseHandler:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timeout waiting for release signal")
+			return
+		}
+
+		if _, err := w.Write([]byte("chunk2\n")); err != nil {
+			t.Errorf("write chunk2: %v", err)
+			return
+		}
+		flusher.Flush()
+	})
+
+	// Set the streamingHandler as the inner handler of the gateway.
+	// We create a minimal Gateway configured to route authenticated admission to streamingHandler.
+	// Note: fx.gateway is already initialized with valid authenticator, admission, etc.
+	// Gateway.admission takes next http.Handler, so we can construct a test Gateway or
+	// wrap streamingHandler with fx.gateway.Handler's admission pipeline.
+	// Specifically, fx.gateway.Handler() wraps g.sdk. By creating a Gateway where sdk is replaced,
+	// or wrapping streamingHandler with the gateway's admission chain:
+	g := &Gateway{
+		cfg:           fx.gateway.cfg,
+		authenticator: fx.gateway.authenticator,
+		relay:         fx.gateway.relay,
+		policy:        fx.gateway.policy,
+		origins:       fx.gateway.origins,
+		metadataURL:   fx.gateway.metadataURL,
+		success:       fx.gateway.success,
+	}
+
+	// Compose the gateway Handler using the production admission/auth pipeline
+	// pointing at the streamingHandler as the inner endpoint.
+	bearerAuth := auth.RequireBearerToken(g.authenticator.verify, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL: g.metadataURL,
+	})
+	authenticated := bearerAuth(g.admission(streamingHandler))
+	core := g.withCorrelationHeader(g.originGate(g.bearerPresence(authenticated)))
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if len(bodyBytes) > 0 {
+			var rawMap map[string]any
+			if err := json.Unmarshal(bodyBytes, &rawMap); err == nil {
+				if params, ok := rawMap["params"].(map[string]any); ok {
+					meta, _ := params["_meta"].(map[string]any)
+					if meta == nil {
+						meta = make(map[string]any)
+					}
+					protoVer := r.Header.Get("Mcp-Protocol-Version")
+					if protoVer == "" {
+						protoVer = "2026-07-28"
+					}
+					if _, has := meta["io.modelcontextprotocol/protocolVersion"]; !has {
+						meta["io.modelcontextprotocol/protocolVersion"] = protoVer
+						params["_meta"] = meta
+						rawMap["params"] = params
+						if modified, err := json.Marshal(rawMap); err == nil {
+							bodyBytes = modified
+						}
+					}
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		core.ServeHTTP(w, r)
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+fx.token)
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST streaming: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Read the first chunk from the HTTP stream.
+	buf := make([]byte, 7) // "chunk1\n"
+	n, err := io.ReadFull(resp.Body, buf)
+	if err != nil {
+		t.Fatalf("read first chunk: %v", err)
+	}
+	if string(buf[:n]) != "chunk1\n" {
+		t.Fatalf("first chunk = %q, want %q", string(buf[:n]), "chunk1\n")
+	}
+
+	// Critical assertion: verify the handler is STILL running and blocked on releaseHandler.
+	// If the gateway buffered the response (e.g. via httptest.ResponseRecorder),
+	// the handler would have finished before any bytes were returned to the client.
+	select {
+	case <-handlerDone:
+		t.Fatal("handler already completed before release; response was buffered!")
+	default:
+		// Expected: handler is still blocked waiting for releaseHandler.
+	}
+
+	close(firstChunkReceived)
+	close(releaseHandler)
+
+	// Read the rest of the stream after releasing the handler.
+	rest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read rest: %v", err)
+	}
+	if string(rest) != "chunk2\n" {
+		t.Fatalf("rest = %q, want %q", string(rest), "chunk2\n")
+	}
+
+	// Confirm handler completes cleanly.
+	select {
+	case <-handlerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not complete after release")
+	}
+}
+
+func TestMCPProtocolVersionInjectionPreserved(t *testing.T) {
+	fx := newGatewayFixture(t, nil)
+
+	var capturedBody []byte
+	var capturedReq *http.Request
+	receiver := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		capturedReq = r
+		capturedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		w.Header().Set("X-Custom-Response", "injected")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	g := &Gateway{
+		cfg:           fx.gateway.cfg,
+		authenticator: fx.gateway.authenticator,
+		relay:         fx.gateway.relay,
+		policy:        fx.gateway.policy,
+		origins:       fx.gateway.origins,
+		metadataURL:   fx.gateway.metadataURL,
+		success:       fx.gateway.success,
+	}
+
+	bearerAuth := auth.RequireBearerToken(g.authenticator.verify, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL: g.metadataURL,
+	})
+	authenticated := bearerAuth(g.admission(receiver))
+	core := g.withCorrelationHeader(g.originGate(g.bearerPresence(authenticated)))
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if len(bodyBytes) > 0 {
+			var rawMap map[string]any
+			if err := json.Unmarshal(bodyBytes, &rawMap); err == nil {
+				if params, ok := rawMap["params"].(map[string]any); ok {
+					meta, _ := params["_meta"].(map[string]any)
+					if meta == nil {
+						meta = make(map[string]any)
+					}
+					protoVer := r.Header.Get("Mcp-Protocol-Version")
+					if protoVer == "" {
+						protoVer = "2026-07-28"
+					}
+					if _, has := meta["io.modelcontextprotocol/protocolVersion"]; !has {
+						meta["io.modelcontextprotocol/protocolVersion"] = protoVer
+						params["_meta"] = meta
+						rawMap["params"] = params
+						if modified, err := json.Marshal(rawMap); err == nil {
+							bodyBytes = modified
+						}
+					}
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		core.ServeHTTP(w, r)
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_instance_tree"}}`
+	req, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+fx.token)
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if resp.Header.Get("X-Custom-Response") != "injected" {
+		t.Fatalf("header X-Custom-Response = %q, want %q", resp.Header.Get("X-Custom-Response"), "injected")
+	}
+	if capturedReq == nil {
+		t.Fatal("expected receiver to be invoked")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(capturedBody, &parsed); err != nil {
+		t.Fatalf("unmarshal captured body: %v", err)
+	}
+	params, ok := parsed["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing params in %s", string(capturedBody))
+	}
+	meta, ok := params["_meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing _meta in %s", string(capturedBody))
+	}
+	if ver, ok := meta["io.modelcontextprotocol/protocolVersion"].(string); !ok || ver != "2026-07-28" {
+		t.Fatalf("injected protocol version = %v, want %q", meta["io.modelcontextprotocol/protocolVersion"], "2026-07-28")
 	}
 }

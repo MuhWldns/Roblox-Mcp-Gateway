@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 
@@ -17,6 +17,22 @@ type RecordedCall = {
   headers: Record<string, string>;
   body?: string;
 };
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function createDeferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 function installFetch(routes: Record<string, MockRoute | MockRoute[]>): RecordedCall[] {
   const calls: RecordedCall[] = [];
@@ -60,6 +76,7 @@ function renderAt(path: string, element: React.ReactElement) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/download" element={<div />} />
+        <Route path="/login" element={<div data-testid="login-page">Login Page</div>} />
         <Route path="*" element={element} />
       </Routes>
     </MemoryRouter>,
@@ -166,6 +183,7 @@ const diagnostics = {
 
 describe("devices screen", () => {
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -232,7 +250,7 @@ describe("devices screen", () => {
     expect(screen.getByText(/connect your first PC/i)).toBeTruthy();
   });
 
-  it("keeps the section heading and surfaces an inline error when the API fails", async () => {
+  it("keeps the section heading and surfaces an inline error when the initial API call fails", async () => {
     installFetch({ [devicesUrl]: { status: 500 } });
 
     renderAt("/devices", <Devices />);
@@ -279,16 +297,13 @@ describe("devices screen", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Revoke this device?" });
     expect(dialog).toBeTruthy();
-    // The explicit warning: the slot does not become free.
     const warning = screen.getByTestId("revoke-slot-warning");
     expect(warning.textContent).toMatch(/slot .*stays used|does not free/i);
 
-    // Cancel first: nothing must reach the server.
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
 
-    // Reopen and confirm: the revoke posts with the CSRF double-submit pair.
     await userEvent.click(screen.getByRole("button", { name: "Revoke device" }));
     await userEvent.click(screen.getByRole("button", { name: "Yes, revoke this device" }));
 
@@ -374,10 +389,310 @@ describe("devices screen", () => {
       /rkd_|rkuc_|mca_|mcr_|mcp_[A-Za-z0-9]|Bearer |csrf-token/i,
     );
   });
+
+  it("refreshes on a 10-second timer when visible and updates state", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [devicesUrl]: [
+        { json: { devices: [deviceOnline] } },
+        { json: { devices: [deviceOnline, deviceOffline] } },
+      ],
+    });
+
+    renderAt("/devices", <Devices />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Laptop A")).toBeTruthy();
+    expect(screen.queryByText("Desktop B")).toBeNull();
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(2);
+    expect(screen.getByText("Desktop B")).toBeTruthy();
+  });
+
+  it("pauses 10s timer when tab is hidden and refreshes immediately when resumed", async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibilityState,
+    });
+
+    const calls = installFetch({
+      [devicesUrl]: [
+        { json: { devices: [deviceOnline] } },
+        { json: { devices: [deviceOnline, deviceOffline] } },
+      ],
+    });
+
+    renderAt("/devices", <Devices />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(1);
+
+    // Hide the document
+    visibilityState = "hidden";
+    fireEvent(document, new Event("visibilitychange"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(25000);
+      await Promise.resolve();
+    });
+
+    // No new fetch while hidden
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(1);
+
+    // Show the document again
+    visibilityState = "visible";
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(2);
+    expect(screen.getByText("Desktop B")).toBeTruthy();
+  });
+
+  it("avoids overlapping concurrent fetches during slow responses", async () => {
+    vi.useFakeTimers();
+    const { promise: slowFirstPromise, resolve: resolveFirstFetch } =
+      createDeferred<boolean>();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const raw = typeof input === "string" ? input : input.toString();
+        if (raw.includes("/api/v1/devices")) {
+          await slowFirstPromise;
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({ devices: [deviceOnline] }),
+          } as unknown as Response;
+        }
+        return { status: 404, ok: false, json: async () => null } as unknown as Response;
+      }),
+    );
+
+    renderAt("/devices", <Devices />);
+
+    // Fast-forward timer while first fetch is still in flight
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+      await Promise.resolve();
+    });
+
+    // Click manual refresh while first fetch is still unresolved
+    const refreshBtn = screen.getByRole("button", { name: /refresh/i });
+    fireEvent.click(refreshBtn);
+
+    // Only 1 fetch call initiated because in-flight guard blocked overlaps
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstFetch(true);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Laptop A")).toBeTruthy();
+  });
+
+  it("supports manual refresh with busy state", async () => {
+    const calls = installFetch({
+      [devicesUrl]: [
+        { json: { devices: [deviceOnline] } },
+        { json: { devices: [deviceOnline, deviceOffline] } },
+      ],
+    });
+
+    renderAt("/devices", <Devices />);
+    expect(await screen.findByText("Laptop A")).toBeTruthy();
+    expect(screen.queryByText("Desktop B")).toBeNull();
+
+    const refreshBtn = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(refreshBtn);
+
+    expect(await screen.findByText("Desktop B")).toBeTruthy();
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(2);
+  });
+
+  it("preserves last good data and shows non-destructive retry banner on background refresh error", async () => {
+    const calls = installFetch({
+      [devicesUrl]: [
+        { json: { devices: [deviceOnline] } },
+        { status: 500 },
+      ],
+    });
+
+    renderAt("/devices", <Devices />);
+    expect(await screen.findByText("Laptop A")).toBeTruthy();
+
+    const refreshBtn = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(refreshBtn);
+
+    // Last good data remains displayed
+    expect(screen.getByText("Laptop A")).toBeTruthy();
+    expect(
+      screen.getByText(/Could not refresh devices\. Showing last known state\./i),
+    ).toBeTruthy();
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(2);
+  });
+
+  it("stops timer and visibility listeners on unmount", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [devicesUrl]: { json: { devices: [deviceOnline] } },
+    });
+
+    const view = renderAt("/devices", <Devices />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(1);
+
+    view.unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+      await Promise.resolve();
+    });
+
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/devices")).toHaveLength(1);
+  });
+
+  it("redirects to login and stops refresh when 401 unauthorized is received", async () => {
+    vi.useFakeTimers();
+    installFetch({
+      [devicesUrl]: { status: 401, json: { error: "unauthorized" } },
+    });
+
+    renderAt("/devices", <Devices />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("login-page")).toBeTruthy();
+    expect(screen.queryByTestId("page-devices")).toBeNull();
+  });
+
+  it("coalesces and executes follow-up fetch when mutation occurs during in-flight read", async () => {
+    vi.useFakeTimers();
+    const { promise: backgroundFetchPromise, resolve: resolveBackgroundFetch } =
+      createDeferred<void>();
+
+    let deviceGetCount = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const raw = typeof input === "string" ? input : input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+
+        if (raw.includes("/api/v1/devices") && method === "GET") {
+          deviceGetCount += 1;
+          if (deviceGetCount === 1) {
+            return {
+              status: 200,
+              ok: true,
+              json: async () => ({ devices: [deviceOnline] }),
+            } as unknown as Response;
+          }
+          if (deviceGetCount === 2) {
+            // Background poll in-flight (still showing pre-mutation state)
+            await backgroundFetchPromise;
+            return {
+              status: 200,
+              ok: true,
+              json: async () => ({ devices: [deviceOnline] }),
+            } as unknown as Response;
+          }
+          // Follow-up fetch after mutation settles
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({ devices: [{ ...deviceOnline, name: "Renamed In Flight" }] }),
+          } as unknown as Response;
+        }
+
+        if (raw.includes("/api/v1/csrf")) {
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({ csrf_token: "csrf-token-1" }),
+          } as unknown as Response;
+        }
+
+        if (raw.includes("/rename") && method === "POST") {
+          return {
+            status: 204,
+            ok: true,
+            json: async () => null,
+          } as unknown as Response;
+        }
+
+        return { status: 404, ok: false, json: async () => null } as unknown as Response;
+      }),
+    );
+
+    renderAt("/devices", <Devices />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Laptop A")).toBeTruthy();
+    expect(deviceGetCount).toBe(1);
+
+    // Advance timer to trigger background fetch (deviceGetCount becomes 2 and holds)
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+    expect(deviceGetCount).toBe(2);
+
+    // Perform rename mutation while background fetch is still in-flight
+    const renameBtn = screen.getByRole("button", { name: "Rename" });
+    fireEvent.click(renameBtn);
+    const input = screen.getByLabelText("Device name");
+    fireEvent.change(input, { target: { value: "Renamed In Flight" } });
+    const saveBtn = screen.getByRole("button", { name: "Save name" });
+    fireEvent.click(saveBtn);
+
+    // Let mutation complete (POST /rename returns 204 and calls fetchDevices())
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // While background fetch is unresolved, no third GET has started yet
+    expect(deviceGetCount).toBe(2);
+
+    // Release the stale background fetch
+    await act(async () => {
+      resolveBackgroundFetch();
+      await Promise.resolve();
+    });
+
+    // The queued refresh should have executed exactly once
+    expect(deviceGetCount).toBe(3);
+    expect(screen.getByText("Renamed In Flight")).toBeTruthy();
+  });
 });
 
 describe("studios screen", () => {
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -401,6 +716,196 @@ describe("studios screen", () => {
     renderAt("/studios", <Studios />);
 
     expect(await screen.findByText(/no studio sessions/i)).toBeTruthy();
+  });
+
+  it("refreshes studios on 10s timer when visible and updates sessions", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [studiosUrl]: [
+        { json: { studios: [studioActive] } },
+        { json: { studios: [studioActive, studioEnded] } },
+      ],
+    });
+
+    renderAt("/studios", <Studios />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("studio-alpha")).toBeTruthy();
+    expect(screen.queryByText("studio-beta")).toBeNull();
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(2);
+    expect(screen.getByText("studio-beta")).toBeTruthy();
+  });
+
+  it("pauses studios refresh when hidden and resumes on visible", async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibilityState,
+    });
+
+    const calls = installFetch({
+      [studiosUrl]: [
+        { json: { studios: [studioActive] } },
+        { json: { studios: [studioActive, studioEnded] } },
+      ],
+    });
+
+    renderAt("/studios", <Studios />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(1);
+
+    visibilityState = "hidden";
+    fireEvent(document, new Event("visibilitychange"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(25000);
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(1);
+
+    visibilityState = "visible";
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(2);
+    expect(screen.getByText("studio-beta")).toBeTruthy();
+  });
+
+  it("avoids overlapping concurrent studio fetches", async () => {
+    vi.useFakeTimers();
+    const { promise: slowFirstPromise, resolve: resolveFirstFetch } =
+      createDeferred<boolean>();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const raw = typeof input === "string" ? input : input.toString();
+        if (raw.includes("/api/v1/studios")) {
+          await slowFirstPromise;
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({ studios: [studioActive] }),
+          } as unknown as Response;
+        }
+        return { status: 404, ok: false, json: async () => null } as unknown as Response;
+      }),
+    );
+
+    renderAt("/studios", <Studios />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+      await Promise.resolve();
+    });
+
+    const refreshBtn = screen.getByRole("button", { name: /refresh/i });
+    fireEvent.click(refreshBtn);
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstFetch(true);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("studio-alpha")).toBeTruthy();
+  });
+
+  it("supports manual studios refresh with busy state", async () => {
+    const calls = installFetch({
+      [studiosUrl]: [
+        { json: { studios: [studioActive] } },
+        { json: { studios: [studioActive, studioEnded] } },
+      ],
+    });
+
+    renderAt("/studios", <Studios />);
+    expect(await screen.findByText("studio-alpha")).toBeTruthy();
+    expect(screen.queryByText("studio-beta")).toBeNull();
+
+    const refreshBtn = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(refreshBtn);
+
+    expect(await screen.findByText("studio-beta")).toBeTruthy();
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(2);
+  });
+
+  it("preserves last good studios data and shows non-destructive retry banner on error", async () => {
+    const calls = installFetch({
+      [studiosUrl]: [
+        { json: { studios: [studioActive] } },
+        { status: 500 },
+      ],
+    });
+
+    renderAt("/studios", <Studios />);
+    expect(await screen.findByText("studio-alpha")).toBeTruthy();
+
+    const refreshBtn = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(refreshBtn);
+
+    expect(screen.getByText("studio-alpha")).toBeTruthy();
+    expect(
+      screen.getByText(/Could not refresh Studio sessions\. Showing last known state\./i),
+    ).toBeTruthy();
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(2);
+  });
+
+  it("cleans up studios timer and visibility listener on unmount", async () => {
+    vi.useFakeTimers();
+    const calls = installFetch({
+      [studiosUrl]: { json: { studios: [studioActive] } },
+    });
+
+    const view = renderAt("/studios", <Studios />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(1);
+
+    view.unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+      await Promise.resolve();
+    });
+
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(calls.filter((c) => c.path === "/api/v1/studios")).toHaveLength(1);
+  });
+
+  it("redirects to login when 401 unauthorized is received on studios", async () => {
+    vi.useFakeTimers();
+    installFetch({
+      [studiosUrl]: { status: 401, json: { error: "unauthorized" } },
+    });
+
+    renderAt("/studios", <Studios />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("login-page")).toBeTruthy();
+    expect(screen.queryByTestId("page-studios")).toBeNull();
   });
 });
 
@@ -464,8 +969,6 @@ describe("status badge accessibility", () => {
     expect(screen.getAllByText("Offline")).toHaveLength(1);
     expect(screen.getAllByText("Revoked")).toHaveLength(1);
 
-    // The shape glyphs must differ so status is distinguishable without
-    // color vision; text alone already carries the full meaning.
     const shapes = screen
       .getAllByTestId("status-shape")
       .map((element) => element.textContent);
@@ -498,7 +1001,6 @@ describe("confirm dialog keyboard interaction", () => {
 
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const confirm = screen.getByRole("button", { name: "Yes, revoke this device" });
-    // Destructive dialogs open with focus on the safe choice.
     expect(document.activeElement).toBe(cancel);
 
     await userEvent.tab();
@@ -525,11 +1027,9 @@ describe("confirm dialog keyboard interaction", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const confirm = screen.getByRole("button", { name: "Yes, revoke this device" });
 
-    // Shift+Tab from the first control wraps to the last control.
     await userEvent.tab({ shift: true });
     expect(document.activeElement).toBe(confirm);
 
-    // Tab from the last control wraps back to the first control.
     await userEvent.tab();
     expect(document.activeElement).toBe(cancel);
 

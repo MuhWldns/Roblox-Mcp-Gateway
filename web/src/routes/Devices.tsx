@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate } from "react-router";
 import {
   type DeviceView,
@@ -19,6 +19,8 @@ export default function Devices() {
   const [devices, setDevices] = useState<DeviceView[] | null>(null);
   const [denied, setDenied] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceView | null>(null);
@@ -29,23 +31,115 @@ export default function Devices() {
   const [draftName, setDraftName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const list = await getDevices();
-      setDevices(list.devices);
-      setFailed(false);
-    } catch (error: unknown) {
-      if (error instanceof UnauthorizedError) {
-        setDenied(true);
-        return;
-      }
-      setFailed(true);
-    }
-  }, []);
+  const inFlightRef = useRef(false);
+  const queuedRefreshRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const deniedRef = useRef(false);
+  const devicesRef = useRef<DeviceView[] | null>(null);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    devicesRef.current = devices;
+  }, [devices]);
+
+  const scheduleNextRefresh = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (
+      !mountedRef.current ||
+      deniedRef.current ||
+      typeof document === "undefined" ||
+      document.visibilityState !== "visible"
+    ) {
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      void fetchDevices();
+    }, 10000);
+  }, []);
+
+  const fetchDevices = useCallback(async () => {
+    if (!mountedRef.current || deniedRef.current) {
+      return;
+    }
+    if (inFlightRef.current) {
+      queuedRefreshRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
+    setRefreshing(true);
+    try {
+      while (mountedRef.current && !deniedRef.current) {
+        queuedRefreshRef.current = false;
+        try {
+          const list = await getDevices();
+          if (!mountedRef.current) return;
+          setDevices(list.devices);
+          devicesRef.current = list.devices;
+          setFailed(false);
+          setRefreshError(null);
+        } catch (error: unknown) {
+          if (!mountedRef.current) return;
+          if (error instanceof UnauthorizedError) {
+            deniedRef.current = true;
+            setDenied(true);
+            if (timerRef.current !== null) {
+              clearTimeout(timerRef.current);
+              timerRef.current = null;
+            }
+            return;
+          }
+          if (devicesRef.current === null) {
+            setFailed(true);
+          } else {
+            setRefreshError("Could not refresh devices. Showing last known state.");
+          }
+        }
+        if (!queuedRefreshRef.current) {
+          break;
+        }
+      }
+    } finally {
+      inFlightRef.current = false;
+      if (mountedRef.current) {
+        setRefreshing(false);
+        scheduleNextRefresh();
+      }
+    }
+  }, [scheduleNextRefresh]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    deniedRef.current = false;
+    void fetchDevices();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        void fetchDevices();
+      } else {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [fetchDevices]);
 
   async function confirmRevoke() {
     if (revoking === null) return;
@@ -55,7 +149,7 @@ export default function Devices() {
       await revokeDevice(revoking.id);
       setRevoking(null);
       setNotice("Device revoked.");
-      await load();
+      await fetchDevices();
     } catch (error: unknown) {
       setActionError(
         error instanceof Error ? error.message : "Revoke failed. Try again.",
@@ -73,7 +167,7 @@ export default function Devices() {
       const credential = await rotateDeviceCredential(rotating.id);
       setRotating(null);
       setRotatedCredential(credential);
-      await load();
+      await fetchDevices();
     } catch {
       setActionError(
         "Rotating the credential failed. The existing credential is still active; try again.",
@@ -94,7 +188,7 @@ export default function Devices() {
       setRenaming(null);
       setDraftName("");
       setNotice("Device renamed.");
-      await load();
+      await fetchDevices();
     } catch (error: unknown) {
       setActionError(
         error instanceof Error ? error.message : "Rename failed. Try again.",
@@ -114,12 +208,31 @@ export default function Devices() {
       aria-labelledby="devices-title"
       className="animate-[pageEnter_200ms_ease]"
     >
-      <h2 id="devices-title" className="text-xl font-semibold text-navy mb-1">
-        Devices
-      </h2>
-      <p className="text-text-secondary mb-6">
-        PCs connected to your account. Revoking access is not a temporary disconnect.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 id="devices-title" className="text-xl font-semibold text-navy mb-1">
+            Devices
+          </h2>
+          <p className="text-text-secondary m-0">
+            PCs connected to your account. Revoking access is not a temporary disconnect.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (timerRef.current !== null) {
+              clearTimeout(timerRef.current);
+              timerRef.current = null;
+            }
+            void fetchDevices();
+          }}
+          disabled={refreshing || busy}
+          aria-busy={refreshing}
+          className="px-3.5 py-1.5 text-sm font-medium border border-border rounded-md text-navy bg-white hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
       {actionError ? (
         <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
           {actionError}
@@ -160,8 +273,39 @@ export default function Devices() {
         </section>
       ) : null}
       {failed ? (
-        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
-          Devices unavailable right now. Reload to try again.
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4 flex items-center justify-between gap-3">
+          <span>Devices unavailable right now. Reload to try again.</span>
+          <button
+            type="button"
+            onClick={() => {
+              if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+              }
+              void fetchDevices();
+            }}
+            className="text-xs font-semibold underline underline-offset-2 hover:text-red-hover"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {refreshError ? (
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4 flex items-center justify-between gap-3">
+          <span>{refreshError}</span>
+          <button
+            type="button"
+            onClick={() => {
+              if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+              }
+              void fetchDevices();
+            }}
+            className="text-xs font-semibold underline underline-offset-2 hover:text-red-hover"
+          >
+            Retry
+          </button>
         </div>
       ) : null}
       {devices === null && !failed ? (

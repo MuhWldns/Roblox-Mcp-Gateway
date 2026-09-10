@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router";
 import { type StudioView, UnauthorizedError, getStudios } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
@@ -9,24 +9,105 @@ export default function Studios() {
   const [studios, setStudios] = useState<StudioView[] | null>(null);
   const [denied, setDenied] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const inFlightRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const deniedRef = useRef(false);
+  const studiosRef = useRef<StudioView[] | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    getStudios()
-      .then((list) => {
-        if (!cancelled) setStudios(list.studios);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof UnauthorizedError) {
-          setDenied(true);
-          return;
-        }
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
+    studiosRef.current = studios;
+  }, [studios]);
+
+  const scheduleNextRefresh = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (
+      !mountedRef.current ||
+      deniedRef.current ||
+      typeof document === "undefined" ||
+      document.visibilityState !== "visible"
+    ) {
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      void fetchStudios();
+    }, 10000);
   }, []);
+
+  const fetchStudios = useCallback(async () => {
+    if (inFlightRef.current || !mountedRef.current || deniedRef.current) {
+      return;
+    }
+    inFlightRef.current = true;
+    setRefreshing(true);
+    try {
+      const list = await getStudios();
+      if (!mountedRef.current) return;
+      setStudios(list.studios);
+      studiosRef.current = list.studios;
+      setFailed(false);
+      setRefreshError(null);
+    } catch (error: unknown) {
+      if (!mountedRef.current) return;
+      if (error instanceof UnauthorizedError) {
+        deniedRef.current = true;
+        setDenied(true);
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        return;
+      }
+      if (studiosRef.current === null) {
+        setFailed(true);
+      } else {
+        setRefreshError("Could not refresh Studio sessions. Showing last known state.");
+      }
+    } finally {
+      if (mountedRef.current) {
+        inFlightRef.current = false;
+        setRefreshing(false);
+        scheduleNextRefresh();
+      }
+    }
+  }, [scheduleNextRefresh]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    deniedRef.current = false;
+    void fetchStudios();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        void fetchStudios();
+      } else {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [fetchStudios]);
 
   if (denied) {
     return <Navigate to="/login" replace />;
@@ -38,15 +119,65 @@ export default function Studios() {
       aria-labelledby="studios-title"
       className="animate-[pageEnter_200ms_ease]"
     >
-      <h2 id="studios-title" className="text-xl font-semibold text-navy mb-1">
-        Studios
-      </h2>
-      <p className="text-text-secondary mb-6">
-        Roblox Studio sessions connected through your Bridges.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 id="studios-title" className="text-xl font-semibold text-navy mb-1">
+            Studios
+          </h2>
+          <p className="text-text-secondary m-0">
+            Roblox Studio sessions connected through your Bridges.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (timerRef.current !== null) {
+              clearTimeout(timerRef.current);
+              timerRef.current = null;
+            }
+            void fetchStudios();
+          }}
+          disabled={refreshing}
+          aria-busy={refreshing}
+          className="px-3.5 py-1.5 text-sm font-medium border border-border rounded-md text-navy bg-white hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
       {failed ? (
-        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4">
-          Studios unavailable right now. Reload to try again.
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4 flex items-center justify-between gap-3">
+          <span>Studios unavailable right now. Reload to try again.</span>
+          <button
+            type="button"
+            onClick={() => {
+              if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+              }
+              void fetchStudios();
+            }}
+            className="text-xs font-semibold underline underline-offset-2 hover:text-red-hover"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {refreshError ? (
+        <div role="alert" className="bg-error-bg text-red border border-red rounded-md px-4 py-3 text-sm font-medium mb-4 flex items-center justify-between gap-3">
+          <span>{refreshError}</span>
+          <button
+            type="button"
+            onClick={() => {
+              if (timerRef.current !== null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+              }
+              void fetchStudios();
+            }}
+            className="text-xs font-semibold underline underline-offset-2 hover:text-red-hover"
+          >
+            Retry
+          </button>
         </div>
       ) : null}
       {studios === null && !failed ? (

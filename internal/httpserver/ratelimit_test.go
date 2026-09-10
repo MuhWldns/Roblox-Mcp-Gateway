@@ -852,3 +852,128 @@ func TestRouterUnlimitedEndpointsStayUnlimited(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterTrustedLoopbackProxyDistinctClientsGetDistinctBuckets(t *testing.T) {
+	stack := newLimitStack(t, map[Class]Budget{
+		ClassLogin: testBudget(1),
+	}, func(cfg *Config, stack *limitStack) {
+		cfg.TrustedProxies = []string{"127.0.0.1/32"}
+	})
+
+	// Two requests from loopback proxy with different X-Forwarded-For clients
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req1.RemoteAddr = "127.0.0.1:54321"
+	req1.Header.Set("X-Forwarded-For", "198.51.100.1")
+	rec1 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec1, req1)
+	if rec1.Code == http.StatusTooManyRequests {
+		t.Fatalf("first client rate limited: status = %d", rec1.Code)
+	}
+
+	// Same client should now be rate limited (exhausted burst of 1)
+	req1Repeat := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req1Repeat.RemoteAddr = "127.0.0.1:54321"
+	req1Repeat.Header.Set("X-Forwarded-For", "198.51.100.1")
+	rec1Repeat := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec1Repeat, req1Repeat)
+	if rec1Repeat.Code != http.StatusTooManyRequests {
+		t.Fatalf("first client repeat status = %d, want 429", rec1Repeat.Code)
+	}
+
+	// Distinct client behind the same trusted loopback proxy must get its own bucket
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req2.RemoteAddr = "127.0.0.1:54321"
+	req2.Header.Set("X-Forwarded-For", "198.51.100.2")
+	rec2 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec2, req2)
+	if rec2.Code == http.StatusTooManyRequests {
+		t.Fatalf("second distinct client rate limited: status = %d", rec2.Code)
+	}
+}
+
+func TestRouterUntrustedPeerCannotSpoofClientIP(t *testing.T) {
+	stack := newLimitStack(t, map[Class]Budget{
+		ClassLogin: testBudget(1),
+	}, func(cfg *Config, stack *limitStack) {
+		cfg.TrustedProxies = []string{"10.0.0.0/8"}
+	})
+
+	// Attacker connecting directly from untrusted peer 203.0.113.5 tries spoofing X-Forwarded-For
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req1.RemoteAddr = "203.0.113.5:12345"
+	req1.Header.Set("X-Forwarded-For", "198.51.100.1")
+	rec1 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec1, req1)
+	if rec1.Code == http.StatusTooManyRequests {
+		t.Fatalf("first request rate limited: status = %d", rec1.Code)
+	}
+
+	// Attacker sends another request with a different spoofed X-Forwarded-For;
+	// since untrusted peer RemoteAddr 203.0.113.5 is the bucket key, this must be rate limited (429)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req2.RemoteAddr = "203.0.113.5:12345"
+	req2.Header.Set("X-Forwarded-For", "198.51.100.2")
+	rec2 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("untrusted peer spoofed request allowed: status = %d, want 429", rec2.Code)
+	}
+}
+
+func TestRouterMultipleTrustedHopsResolvesRightToLeft(t *testing.T) {
+	stack := newLimitStack(t, map[Class]Budget{
+		ClassLogin: testBudget(1),
+	}, func(cfg *Config, stack *limitStack) {
+		cfg.TrustedProxies = []string{"10.0.0.0/8", "172.16.0.0/12"}
+	})
+
+	// Direct peer is 10.0.0.1 (trusted). XFF has spoofed left-most 1.2.3.4, client 198.51.100.23, intermediate proxy 172.16.1.1 (trusted).
+	// Right-to-left resolution should identify 198.51.100.23 as the client principal.
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req1.RemoteAddr = "10.0.0.1:443"
+	req1.Header.Set("X-Forwarded-For", "1.2.3.4, 198.51.100.23, 172.16.1.1")
+	rec1 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec1, req1)
+	if rec1.Code == http.StatusTooManyRequests {
+		t.Fatalf("first request rate limited: status = %d", rec1.Code)
+	}
+
+	// Second request from same client 198.51.100.23 (even if spoofed leftmost differs) must be rate limited (429)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+	req2.RemoteAddr = "10.0.0.1:443"
+	req2.Header.Set("X-Forwarded-For", "9.9.9.9, 198.51.100.23, 172.16.1.1")
+	rec2 := httptest.NewRecorder()
+	stack.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("repeat request for same resolved client status = %d, want 429", rec2.Code)
+	}
+}
+
+func TestRouterMalformedForwardedHeadersFailClosed(t *testing.T) {
+	stack := newLimitStack(t, map[Class]Budget{
+		ClassLogin: testBudget(10),
+	}, func(cfg *Config, stack *limitStack) {
+		cfg.TrustedProxies = []string{"10.0.0.0/8"}
+	})
+
+	malformedValues := [][]string{
+		{""},
+		{"invalid-ip"},
+		{"198.51.100.1,,10.0.0.2"},
+		{"198.51.100.1:8080"},
+		{"198.51.100.1", "198.51.100.2"},
+	}
+
+	for _, vals := range malformedValues {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roblox/login", nil)
+		req.RemoteAddr = "10.0.0.1:443"
+		for _, v := range vals {
+			req.Header.Add("X-Forwarded-For", v)
+		}
+		rec := httptest.NewRecorder()
+		stack.router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("malformed XFF %v status = %d, want 400", vals, rec.Code)
+		}
+	}
+}

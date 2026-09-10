@@ -3,15 +3,15 @@ import { Link, Navigate, useSearchParams } from "react-router";
 import {
   type EnrollmentClaim,
   type MeResponse,
+  ApiError,
   UnauthorizedError,
   approveEnrollment,
   getEnrollmentClaim,
   getMe,
 } from "../api/client";
 
-const pollIntervalMs = 500;
-const pollLimit = 120;
-
+const pollIntervalMs = 1500;
+const pollLimit = 60;
 // EnrollPage handles the device enrollment flow: Bridge generates a code,
 // the user reviews the requesting device and explicitly approves it.
 export default function EnrollPage() {
@@ -23,6 +23,7 @@ export default function EnrollPage() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [denied, setDenied] = useState(false);
   const [licenseRequired, setLicenseRequired] = useState(false);
+  const [expired, setExpired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pollTimer = useRef<number | null>(null);
@@ -32,8 +33,12 @@ export default function EnrollPage() {
     try {
       const pending = await getEnrollmentClaim(value);
       setClaim(pending);
-    } catch {
-      setError("We couldn’t load this pairing code. Check the code in Buildly Companion and try again.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 410) {
+        setError("This pairing code has expired. Please start pairing again in Buildly Companion.");
+      } else {
+        setError("We couldn’t load this pairing code. Check the code in Buildly Companion and try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -45,8 +50,12 @@ export default function EnrollPage() {
     try {
       await approveEnrollment(code);
       setApproved(true);
-    } catch {
-      setError("We couldn’t approve this computer. Check your connection and try again.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 410) {
+        setError("This pairing code has expired. Please start pairing again in Buildly Companion.");
+      } else {
+        setError("We couldn’t approve this computer. Check your connection and try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -74,50 +83,114 @@ export default function EnrollPage() {
     };
   }, []);
 
-  // Approval and first binding are distinct server events. Poll until Bridge
-  // finishes the exchange and the server exposes the active trial or reports
-  // that a license is required.
+  // Approval and first binding are distinct server events. Poll claim status as
+  // primary signal until Bridge finishes exchange and server starts the active
+  // trial or reports that a license is required. Avoid fetching /me during pending
+  // status; fetch /me only when claim consumption or status change signals exchange completion.
   useEffect(() => {
-    if (!approved || licenseRequired) return;
+    if (!approved || licenseRequired || expired) return;
 
     let cancelled = false;
     let attempts = 0;
     const pollCode = code.trim();
 
     const tick = async () => {
+      if (cancelled) return;
       attempts += 1;
 
       try {
-        const claimPromise =
-          pollCode !== ""
-            ? getEnrollmentClaim(pollCode).catch(() => null)
-            : Promise.resolve(null);
-        const mePromise = getMe().catch(() => null);
-
-        const [claimResult, meResult] = await Promise.all([
-          claimPromise,
-          mePromise,
-        ]);
-
-        if (cancelled) return;
-
-        if (claimResult && claimResult.status === "license_required") {
-          setLicenseRequired(true);
-          if (pollTimer.current !== null) {
-            window.clearTimeout(pollTimer.current);
-            pollTimer.current = null;
+        if (pollCode === "") {
+          const meResult = await getMe().catch((err) => {
+            if (err instanceof UnauthorizedError && !cancelled) {
+              setDenied(true);
+            }
+            return null;
+          });
+          if (cancelled) return;
+          if (meResult) {
+            setMe(meResult);
+            if (meResult.trial?.active) {
+              if (pollTimer.current !== null) {
+                window.clearTimeout(pollTimer.current);
+                pollTimer.current = null;
+              }
+              return;
+            }
           }
-          return;
-        }
+        } else {
+          let claimResult: EnrollmentClaim | null = null;
+          let claimConsumed = false;
 
-        if (meResult) {
-          setMe(meResult);
-          if (meResult.trial?.active) {
+          try {
+            claimResult = await getEnrollmentClaim(pollCode);
+          } catch (claimErr) {
+            if (cancelled) return;
+            if (claimErr instanceof UnauthorizedError) {
+              setDenied(true);
+              if (pollTimer.current !== null) {
+                window.clearTimeout(pollTimer.current);
+                pollTimer.current = null;
+              }
+              return;
+            }
+            if (claimErr instanceof ApiError) {
+              if (claimErr.status === 410) {
+                setExpired(true);
+                if (pollTimer.current !== null) {
+                  window.clearTimeout(pollTimer.current);
+                  pollTimer.current = null;
+                }
+                return;
+              }
+              if (claimErr.status === 404) {
+                // 404: claim consumed upon successful bridge exchange.
+                claimConsumed = true;
+              }
+            }
+            // Other errors (e.g. network/500) are transient.
+          }
+
+          if (cancelled) return;
+
+          if (claimResult && claimResult.status === "license_required") {
+            setLicenseRequired(true);
             if (pollTimer.current !== null) {
               window.clearTimeout(pollTimer.current);
               pollTimer.current = null;
             }
             return;
+          }
+
+          const isPendingOrApproved =
+            claimResult !== null &&
+            (claimResult.status === "pending" || claimResult.status === "approved");
+
+          if (claimConsumed || (claimResult !== null && !isPendingOrApproved)) {
+            try {
+              const meResult = await getMe();
+              if (cancelled) return;
+              if (meResult) {
+                setMe(meResult);
+                if (meResult.trial?.active) {
+                  if (pollTimer.current !== null) {
+                    window.clearTimeout(pollTimer.current);
+                    pollTimer.current = null;
+                  }
+                  return;
+                }
+              }
+            } catch (meErr) {
+              if (cancelled) return;
+              if (meErr instanceof UnauthorizedError) {
+                setDenied(true);
+                if (pollTimer.current !== null) {
+                  window.clearTimeout(pollTimer.current);
+                  pollTimer.current = null;
+                }
+                return;
+              }
+              // Transient me fetch failure
+            }
           }
         }
       } catch {
@@ -150,7 +223,7 @@ export default function EnrollPage() {
         pollTimer.current = null;
       }
     };
-  }, [approved, licenseRequired, code]);
+  }, [approved, licenseRequired, expired, code]);
 
   if (denied) {
     return <Navigate to={`/login?${new URLSearchParams({ next: `/enroll?${new URLSearchParams({ code })}` })}`} replace />;
@@ -247,6 +320,19 @@ export default function EnrollPage() {
         >
           <p role="alert" className="text-navy font-semibold mb-4">
             You don’t have a license. Please contact support to get a license.
+          </p>
+          <Link to="/setup" className="inline-flex min-h-11 items-center underline">
+            Back to setup
+          </Link>
+        </section>
+      ) : expired ? (
+        <section
+          data-testid="pairing-expired-status"
+          aria-label="Pairing expired"
+          className="bg-white border border-border rounded-lg p-6"
+        >
+          <p role="alert" className="text-navy font-semibold mb-4">
+            This pairing code has expired. Please start pairing again in Buildly Companion.
           </p>
           <Link to="/setup" className="inline-flex min-h-11 items-center underline">
             Back to setup

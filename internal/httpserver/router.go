@@ -102,10 +102,15 @@ type Config struct {
 	// MCP endpoints. Health probes, the discovery documents, and static
 	// assets are never limited. A nil limiter leaves every endpoint
 	// unlimited; production composition should always supply one.
-	Limits *Limiter
-
+	Limits        *Limiter
 	AllowedOrigin *url.URL
 	StaticDir     string
+
+	// TrustedProxies optionally configures the reverse proxy CIDR prefixes
+	// from which X-Forwarded-For is trusted. When configured, client IP
+	// middleware resolves the verified remote client address before any
+	// rate-limiting or route handler runs.
+	TrustedProxies []string
 }
 
 type userIDKeyType struct{}
@@ -263,11 +268,22 @@ func NewRouter(cfg Config) (http.Handler, error) {
 		mux.Handle("/", spaHandler(cfg.StaticDir))
 	}
 
+	var handler http.Handler = mux
+	if len(cfg.TrustedProxies) > 0 {
+		clientIPMiddleware, err := NewTrustedClientAddressMiddleware(cfg.TrustedProxies)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		handler = clientIPMiddleware(handler)
+	}
+
 	// From the outside in: the exact-origin CORS policy first so allowed
 	// preflights and CORS headers apply even to sanitized panic responses;
 	// then panic recovery, request id assignment and echo, and the fixed
-	// security headers around every route.
-	return exactOrigin(cfg.AllowedOrigin)(RecoverPanics(requestID(secureHeaders(mux)))), nil
+	// security headers around every route, with verified client-address
+	// resolution inside security headers and wrapping the mux so every
+	// route and RemotePrincipal evaluation sees the verified client.
+	return exactOrigin(cfg.AllowedOrigin)(RecoverPanics(requestID(secureHeaders(handler)))), nil
 }
 
 // bodyLimit resolves the configured /api/ body bound.

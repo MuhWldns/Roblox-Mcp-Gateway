@@ -277,13 +277,14 @@ func main() {
 			OAuth:        oauthStore,
 			AdminUsers:   splitAndTrim(env("ADMIN_USER_IDS", ""), ","),
 		},
-		Health:        probes,
-		Metadata:      &metadata,
-		MCP:           work.MCP(gateway.Handler()),
-		OAuth:         provider.Handler(),
-		Bridge:        work.WSS(hub),
-		AllowedOrigin: config.AllowedOrigin,
-		StaticDir:     env("WEB_STATIC_DIR", ""),
+		Health:         probes,
+		Metadata:       &metadata,
+		MCP:            work.MCP(gateway.Handler()),
+		OAuth:          provider.Handler(),
+		Bridge:         work.WSS(hub),
+		AllowedOrigin:  config.AllowedOrigin,
+		TrustedProxies: config.TrustedProxies,
+		StaticDir:      env("WEB_STATIC_DIR", ""),
 	})
 	if err != nil {
 		logger.Error("router setup failed", "error", err.Error())
